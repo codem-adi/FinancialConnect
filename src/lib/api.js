@@ -1,6 +1,11 @@
-import { authHeaders, getAuthToken } from './authStorage';
-import { API_BASE } from './apiBase';
+import { getAuthToken } from './authStorage';
+import { appApi, authApi } from '../services/endpoints';
+
 const LOCAL_KEY = 'retirewise-data';
+
+function apiError(err, fallback) {
+  throw new Error(err.response?.data?.error || fallback);
+}
 
 export function loadFromLocalStorage() {
   try {
@@ -16,196 +21,178 @@ export function saveToLocalStorage(data) {
 export async function fetchAppData() {
   if (!getAuthToken()) return null;
   try {
-    const res = await fetch(`${API_BASE}/`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = await res.json();
-      saveToLocalStorage(data);
-      return data;
-    }
-    if (res.status === 401) return null;
-  } catch { /* fallback */ }
-  return loadFromLocalStorage();
+    const { data } = await appApi.getData();
+    saveToLocalStorage(data);
+    return data;
+  } catch (err) {
+    if (err.response?.status === 401) return null;
+    return loadFromLocalStorage();
+  }
 }
 
 export async function saveAppData(data, audit) {
   saveToLocalStorage(data);
   const body = audit ? { ...data, _audit: audit } : data;
-  const res = await fetch(`${API_BASE}/`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Failed to save data');
+  try {
+    const { data: saved } = await appApi.saveData(body);
+    return saved;
+  } catch (err) {
+    apiError(err, 'Failed to save data');
   }
-  return res.json();
 }
 
 export async function savePersonalFinance(finance, audit) {
   const body = audit ? { ...finance, _audit: audit } : finance;
-  const res = await fetch(`${API_BASE}/finance`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Failed to save');
+  try {
+    const { data } = await appApi.saveFinance(body);
+    return data;
+  } catch (err) {
+    apiError(err, 'Failed to save');
   }
-  return res.json();
 }
 
 export async function savePlan(plan, audit) {
   const body = audit ? { ...plan, _audit: audit } : plan;
-  const res = await fetch(`${API_BASE}/plans`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  const { data } = await appApi.savePlan(body);
+  return data;
 }
 
 export async function deletePlan(id) {
-  await fetch(`${API_BASE}/plans/${id}`, { method: 'DELETE', headers: authHeaders() });
+  await appApi.deletePlan(id);
 }
 
 export async function duplicatePlan(id) {
-  const res = await fetch(`${API_BASE}/plans/${id}/duplicate`, {
-    method: 'POST',
-    headers: authHeaders(),
-  });
-  return res.json();
+  const { data } = await appApi.duplicatePlan(id);
+  return data;
 }
 
 export async function activatePlan(id) {
-  const res = await fetch(`${API_BASE}/plans/active/${id}`, {
-    method: 'PATCH',
-    headers: authHeaders(),
-  });
-  return res.ok ? res.json() : { activePlanId: id };
+  try {
+    const { data } = await appApi.activatePlan(id);
+    return data;
+  } catch {
+    return { activePlanId: id };
+  }
 }
 
 export async function setTheme(theme) {
-  await fetch(`${API_BASE}/theme`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify({ theme }),
-  });
+  await appApi.setTheme(theme);
 }
 
 export async function fetchJoinCode() {
-  const res = await fetch(`${API_BASE}/team/join-code`, { headers: authHeaders() });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Could not load join code');
-  return data;
+  try {
+    const { data } = await appApi.joinCode();
+    return data;
+  } catch (err) {
+    apiError(err, 'Could not load join code');
+  }
 }
 
 export async function fetchJoinRequests() {
-  const res = await fetch(`${API_BASE}/team/join-requests`, { headers: authHeaders() });
-  return res.ok ? res.json() : { requests: [] };
+  try {
+    const { data } = await appApi.joinRequests();
+    return data;
+  } catch {
+    return { requests: [] };
+  }
 }
 
 export async function approveJoinRequest(id) {
-  const res = await fetch(`${API_BASE}/team/join-requests/${id}/approve`, {
-    method: 'POST',
-    headers: authHeaders(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Approve failed');
-  return data;
+  try {
+    const { data } = await appApi.approveJoin(id);
+    return data;
+  } catch (err) {
+    apiError(err, 'Approve failed');
+  }
 }
 
 export async function rejectJoinRequest(id) {
-  const res = await fetch(`${API_BASE}/team/join-requests/${id}/reject`, {
-    method: 'POST',
-    headers: authHeaders(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Reject failed');
-  return data;
+  try {
+    const { data } = await appApi.rejectJoin(id);
+    return data;
+  } catch (err) {
+    apiError(err, 'Reject failed');
+  }
 }
 
 export async function fetchTeamMembers() {
-  const res = await fetch(`${API_BASE}/team/members`, { headers: authHeaders() });
-  return res.ok ? res.json() : { members: [] };
+  try {
+    const { data } = await appApi.teamMembers();
+    return data;
+  } catch {
+    return { members: [] };
+  }
 }
 
 export async function inviteTeamMember(email, role) {
-  const res = await fetch(`${API_BASE}/team/members`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ email, role }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Invite failed');
-  return data;
+  try {
+    const { data } = await appApi.inviteMember(email, role);
+    return data;
+  } catch (err) {
+    apiError(err, 'Invite failed');
+  }
 }
 
 export async function updateTeamMemberRole(memberId, role) {
-  const res = await fetch(`${API_BASE}/team/members/${memberId}`, {
-    method: 'PATCH',
-    headers: authHeaders(),
-    body: JSON.stringify({ role }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Update failed');
-  return data;
+  try {
+    const { data } = await appApi.updateMemberRole(memberId, role);
+    return data;
+  } catch (err) {
+    apiError(err, 'Update failed');
+  }
 }
 
 export async function removeTeamMember(memberId) {
-  const res = await fetch(`${API_BASE}/team/members/${memberId}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Remove failed');
-  return data;
+  try {
+    const { data } = await appApi.removeMember(memberId);
+    return data;
+  } catch (err) {
+    apiError(err, 'Remove failed');
+  }
 }
 
 export async function requestLeaveGroupOtp() {
-  const res = await fetch(`${API_BASE}/team/leave/request-otp`, {
-    method: 'POST',
-    headers: authHeaders(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Could not send verification code');
-  return data;
+  try {
+    const { data } = await authApi.leaveRequestOtp();
+    return data;
+  } catch (err) {
+    apiError(err, 'Could not send verification code');
+  }
 }
 
 export async function leaveGroup(otp) {
-  const res = await fetch(`${API_BASE}/team/leave`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ otp }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Could not leave group');
-  return data;
+  try {
+    const { data } = await authApi.leave(otp);
+    return data;
+  } catch (err) {
+    apiError(err, 'Could not leave group');
+  }
 }
 
 export async function fetchAuditLog(limit = 20, offset = 0) {
-  const res = await fetch(`${API_BASE}/audit?limit=${limit}&offset=${offset}`, { headers: authHeaders() });
-  return res.ok ? res.json() : { logs: [], hasMore: false, offset: 0, limit };
+  try {
+    const { data } = await appApi.auditLog(limit, offset);
+    return data;
+  } catch {
+    return { logs: [], hasMore: false, offset: 0, limit };
+  }
 }
 
 export async function fetchNotifications(limit = 10) {
-  const res = await fetch(`${API_BASE}/notifications?limit=${limit}`, { headers: authHeaders() });
-  return res.ok ? res.json() : { notifications: [], unreadCount: 0 };
+  try {
+    const { data } = await appApi.notifications(limit);
+    return data;
+  } catch {
+    return { notifications: [], unreadCount: 0 };
+  }
 }
 
 export async function markNotificationRead(id) {
-  await fetch(`${API_BASE}/notifications/${id}/read`, {
-    method: 'PATCH',
-    headers: authHeaders(),
-  });
+  await appApi.markNotificationRead(id);
 }
 
 export async function markAllNotificationsRead() {
-  await fetch(`${API_BASE}/notifications/read-all`, {
-    method: 'PATCH',
-    headers: authHeaders(),
-  });
+  await appApi.markAllNotificationsRead();
 }
 
 export function exportJSON(data) {

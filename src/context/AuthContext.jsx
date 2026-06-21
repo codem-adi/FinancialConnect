@@ -1,9 +1,18 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getAuthSession, setAuthSession, clearAuthSession, authHeaders } from '../lib/authStorage';
-import { parseOtpJson } from '../lib/apiOtp';
-import { API_BASE } from '../lib/apiBase';
+import { getAuthSession, setAuthSession, clearAuthSession } from '../lib/authStorage';
+import { otpRequest } from '../lib/apiOtp';
+import { authApi } from '../services/endpoints';
 
 const AuthContext = createContext(null);
+
+function authError(err, fallback) {
+  const data = err.response?.data || {};
+  const error = new Error(data.error || fallback);
+  error.code = data.code;
+  error.retryAfterSeconds = data.retryAfterSeconds;
+  error.blockedUntil = data.blockedUntil;
+  throw error;
+}
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => getAuthSession());
@@ -25,9 +34,8 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return;
     }
-    fetch(`${API_BASE}/auth/me`, { headers: authHeaders() })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((me) => {
+    authApi.me()
+      .then(({ data: me }) => {
         applySession({ ...stored, token: stored.token, ...me });
       })
       .catch(() => applySession(null))
@@ -35,132 +43,91 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const login = useCallback(async (email, password) => {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (res.ok) {
+    try {
+      const { data } = await authApi.login(email, password);
       applySession({ ...data, token: data.token });
       return data;
+    } catch (err) {
+      const data = err.response?.data;
+      if (data?.token && data?.code === 'NEEDS_VERIFICATION') {
+        applySession({ ...data, token: data.token, needsVerification: true });
+        return data;
+      }
+      authError(err, 'Login failed');
     }
-    if (data.token && data.code === 'NEEDS_VERIFICATION') {
-      applySession({ ...data, token: data.token, needsVerification: true });
-      return data;
-    }
-    const err = new Error(data.error || 'Login failed');
-    err.code = data.code;
-    err.retryAfterSeconds = data.retryAfterSeconds;
-    err.blockedUntil = data.blockedUntil;
-    throw err;
   }, [applySession]);
 
   const signup = useCallback(async ({ email, password, name, joinCode, role }) => {
-    const res = await fetch(`${API_BASE}/auth/signup`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, password, name, joinCode: joinCode || undefined, role }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      const err = new Error(data.error || 'Signup failed');
-      err.code = data.code;
-      err.retryAfterSeconds = data.retryAfterSeconds;
-      err.blockedUntil = data.blockedUntil;
-      throw err;
+    try {
+      const { data } = await authApi.signup({
+        email, password, name, joinCode: joinCode || undefined, role,
+      });
+      applySession({ ...data, token: data.token });
+      return data;
+    } catch (err) {
+      authError(err, 'Signup failed');
     }
-    applySession({ ...data, token: data.token });
-    return data;
   }, [applySession]);
 
   const verifyOtp = useCallback(async (email, otp, purpose = 'activation') => {
-    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, otp, purpose }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Verification failed');
-    applySession({ ...getAuthSession(), ...data, token: data.token || getAuthSession()?.token });
-    return data;
+    try {
+      const { data } = await authApi.verifyOtp({ email, otp, purpose });
+      applySession({ ...getAuthSession(), ...data, token: data.token || getAuthSession()?.token });
+      return data;
+    } catch (err) {
+      throw new Error(err.response?.data?.error || 'Verification failed');
+    }
   }, [applySession]);
 
-  const resendOtp = useCallback(async (email, purpose = 'activation') => {
-    const res = await fetch(`${API_BASE}/auth/resend-otp`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, purpose }),
-    });
-    return parseOtpJson(res, 'Could not resend OTP');
-  }, []);
+  const resendOtp = useCallback(async (email, purpose = 'activation') => (
+    otpRequest(authApi.resendOtp(email, purpose), 'Could not resend OTP')
+  ), []);
 
-  const requestLoginOtp = useCallback(async (email) => {
-    const res = await fetch(`${API_BASE}/auth/login-otp`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email }),
-    });
-    return parseOtpJson(res, 'Could not send login code');
-  }, []);
+  const requestLoginOtp = useCallback(async (email) => (
+    otpRequest(authApi.loginOtp(email), 'Could not send login code')
+  ), []);
 
   const loginWithOtp = useCallback(async (email, otp) => {
-    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, otp, purpose: 'login' }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
-    applySession({ ...data, token: data.token });
-    return data;
+    try {
+      const { data } = await authApi.verifyOtp({ email, otp, purpose: 'login' });
+      applySession({ ...data, token: data.token });
+      return data;
+    } catch (err) {
+      throw new Error(err.response?.data?.error || 'Login failed');
+    }
   }, [applySession]);
 
-  const forgotPassword = useCallback(async (email) => {
-    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email }),
-    });
-    return parseOtpJson(res, 'Request failed');
-  }, []);
+  const forgotPassword = useCallback(async (email) => (
+    otpRequest(authApi.forgotPassword(email), 'Request failed')
+  ), []);
 
   const resetPassword = useCallback(async (email, otp, newPassword) => {
-    const res = await fetch(`${API_BASE}/auth/reset-password`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ email, otp, newPassword }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Reset failed');
-    applySession({ ...data, token: data.token });
-    return data;
+    try {
+      const { data } = await authApi.resetPassword({ email, otp, newPassword });
+      applySession({ ...data, token: data.token });
+      return data;
+    } catch (err) {
+      throw new Error(err.response?.data?.error || 'Reset failed');
+    }
   }, [applySession]);
 
   const logout = useCallback(() => applySession(null), [applySession]);
 
   const refreshSession = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
-    if (!res.ok) return;
-    const me = await res.json();
-    applySession({ ...getAuthSession(), ...me, token: getAuthSession()?.token });
+    try {
+      const { data: me } = await authApi.me();
+      applySession({ ...getAuthSession(), ...me, token: getAuthSession()?.token });
+    } catch {
+      /* ignore */
+    }
   }, [applySession]);
 
-  const requestLeaveGroupOtp = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/team/leave/request-otp`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    return parseOtpJson(res, 'Could not send verification code');
-  }, []);
+  const requestLeaveGroupOtp = useCallback(async () => (
+    otpRequest(authApi.leaveRequestOtp(), 'Could not send verification code')
+  ), []);
 
   const leaveGroup = useCallback(async (otp) => {
-    const res = await fetch(`${API_BASE}/team/leave`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ otp }),
-    });
-    const data = await parseOtpJson(res, 'Could not leave group');
+    const data = await otpRequest(authApi.leave(otp), 'Could not leave group');
     applySession({ ...data, token: data.token });
     return data;
   }, [applySession]);
