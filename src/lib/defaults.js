@@ -59,6 +59,7 @@ export function createFreshAppData(userName) {
       otherIncome: 0,
       expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
       monthlyRecords: [],
+      memberCards: [],
       freedomSettings: { ...FRESH_FREEDOM_SETTINGS },
       updatedAt: new Date().toISOString(),
     },

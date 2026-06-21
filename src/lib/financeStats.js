@@ -2,6 +2,7 @@ import { toNum } from './utils';
 import { computeLoanStats, getPrepayments } from './loanCalculations';
 import { DEFAULT_FREEDOM_SETTINGS } from './goalCalculations';
 import { getTotalActiveAssets, migrateLegacyAssets } from './assetCalculations';
+import { normalizeMemberCards, sumCardBillAmounts } from './cardBillCalculations';
 
 export function getMonthKey(date = new Date()) {
   const d = date instanceof Date ? date : new Date(date);
@@ -105,7 +106,8 @@ export function hasMonthExpenseData(pf, monthKey) {
   if (saved) {
     const cats = Object.values(saved.categoryAmounts || {}).reduce((s, v) => s + toNum(v), 0);
     const extra = (saved.extraExpenses || []).reduce((s, e) => s + toNum(e.amount), 0);
-    return cats + extra > 0;
+    const cards = sumCardBillAmounts(saved, normalizeMemberCards(pf));
+    return cats + extra + cards > 0;
   }
   return false;
 }
@@ -228,6 +230,7 @@ export function getMonthRecord(pf, monthKey) {
       extraExpenses: found.extraExpenses || [],
       pausedMembers: found.pausedMembers || [],
       memberIncomeAdjustments: found.memberIncomeAdjustments || {},
+      cardBillAmounts: found.cardBillAmounts || {},
       notes: found.notes || '',
     };
   }
@@ -238,6 +241,7 @@ export function getMonthRecord(pf, monthKey) {
     extraExpenses: [],
     pausedMembers: [],
     memberIncomeAdjustments: {},
+    cardBillAmounts: {},
     notes: '',
   };
 }
@@ -286,7 +290,8 @@ export function computeMonthStats(pf, monthKey) {
   const loanEmi = getLoanEmiTotal(pf);
   const loanPrepayments = getLoanPrepaymentTotal(pf, monthKey);
   const loanPayments = loanEmi + loanPrepayments;
-  const totalExpenses = livingExpenses + loanPayments;
+  const cardBillTotal = sumCardBillAmounts(record, normalizeMemberCards(pf));
+  const totalExpenses = livingExpenses + loanPayments + cardBillTotal;
   const savings = totalIncome - totalExpenses;
   const savingsRate = totalIncome > 0 ? (savings / totalIncome) * 100 : 0;
 
@@ -315,6 +320,14 @@ export function computeMonthStats(pf, monthKey) {
       prepaymentAmount: loanPrepayments,
     });
   }
+  if (cardBillTotal > 0) {
+    categoryBreakdown.push({
+      id: 'card-bills',
+      name: 'Credit Card Bills',
+      color: '#6366f1',
+      amount: cardBillTotal,
+    });
+  }
 
   return {
     month: monthKey,
@@ -329,6 +342,7 @@ export function computeMonthStats(pf, monthKey) {
     loanEmi,
     loanPrepayments,
     loanPayments,
+    cardBillTotal,
     totalExpenses,
     savings,
     savingsRate,
@@ -381,6 +395,7 @@ export function normalizePersonalFinance(pf) {
     ...pf,
     expenseCategories: pf.expenseCategories?.length ? pf.expenseCategories : DEFAULT_EXPENSE_CATEGORIES,
     monthlyRecords: pf.monthlyRecords || [],
+    memberCards: pf.memberCards ?? pf.memberCars ?? [],
     freedomSettings: { ...DEFAULT_FREEDOM_SETTINGS, ...(pf.freedomSettings || {}) },
     assets: pf.assetsMigrated ? (pf.assets || []) : migrateLegacyAssets(pf.assets || []),
     assetsMigrated: true,

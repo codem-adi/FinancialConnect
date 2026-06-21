@@ -10,6 +10,7 @@ import { isFreshHousehold } from '../../lib/defaults';
 import { computeOverviewStats, getMonthlyChartData, getMonthKey, formatMonthLabel } from '../../lib/financeStats';
 import { AllocationTable, withAllocationPercent } from '../charts/AllocationTable';
 import { StatCard, Card, Badge, PageHeader } from '../ui';
+import { CardBillAlertsBanner } from './CardBillAlertsBanner';
 
 const CHART_COLORS = { income: '#10b981', outflow: '#ef4444', savings: '#6366f1' };
 
@@ -71,6 +72,8 @@ export function OverviewTab() {
           </button>
         ) : null}
       />
+
+      <CardBillAlertsBanner cards={pf.memberCards ?? pf.memberCars} pf={pf} />
 
       {isFresh && (
         <Card className="!p-0 overflow-hidden border-indigo-200 dark:border-indigo-800">

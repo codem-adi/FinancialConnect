@@ -3,14 +3,36 @@ import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Btn, InputField, Card, OtpResendControl } from '../ui';
 
-export function OtpVerifyScreen({ purpose = 'activation', onDone, title, subtitle, email: emailProp, initialResendCooldown = 30 }) {
-  const { session, verifyOtp, resendOtp, resetPassword } = useAuth();
+export function OtpVerifyScreen({
+  purpose = 'activation',
+  onDone,
+  onBack,
+  backLabel,
+  title,
+  subtitle,
+  email: emailProp,
+  initialResendCooldown = 30,
+}) {
+  const { session, verifyOtp, resendOtp, resetPassword, logout } = useAuth();
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const email = emailProp || session?.user?.email || '';
+
+  const handleBack = () => {
+    if (onBack) {
+      onBack();
+      return;
+    }
+    if (purpose === 'activation') {
+      sessionStorage.setItem('auth-return-mode', 'signup');
+      logout();
+    }
+  };
+
+  const defaultBackLabel = purpose === 'reset' ? 'Back to login' : 'Use a different email';
 
   const submit = async (e) => {
     e.preventDefault();
@@ -55,7 +77,7 @@ export function OtpVerifyScreen({ purpose = 'activation', onDone, title, subtitl
           </Btn>
         </form>
 
-        <div className="mt-4">
+        <div className="mt-4 space-y-2">
           <OtpResendControl
             email={email}
             initialCooldown={initialResendCooldown}
@@ -63,6 +85,15 @@ export function OtpVerifyScreen({ purpose = 'activation', onDone, title, subtitl
             onResend={() => resendOtp(email, purpose)}
             onError={setError}
           />
+          {(onBack || purpose === 'activation') && (
+            <button
+              type="button"
+              onClick={handleBack}
+              className="text-sm text-slate-500 hover:text-slate-400 w-full text-center"
+            >
+              {backLabel || defaultBackLabel}
+            </button>
+          )}
         </div>
       </Card>
     </div>

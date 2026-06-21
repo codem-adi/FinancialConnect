@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TrendingUp } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Btn, InputField, Card, OtpResendControl } from '../ui';
@@ -19,6 +19,13 @@ export function AuthPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (sessionStorage.getItem('auth-return-mode') === 'signup') {
+      sessionStorage.removeItem('auth-return-mode');
+      setMode('signup');
+    }
+  }, []);
 
   const switchMode = (next) => {
     setMode(next);
@@ -129,6 +136,7 @@ export function AuthPage() {
         subtitle="Enter the code from your email and choose a new password"
         initialResendCooldown={30}
         onDone={() => switchMode('login')}
+        onBack={() => switchMode('login')}
       />
     );
   }

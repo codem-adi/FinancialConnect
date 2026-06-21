@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { Plus, Trash2, Calendar, TrendingDown, TrendingUp, IndianRupee, Car, CreditCard, PauseCircle, ArrowDownCircle, Pencil, Check } from 'lucide-react';
+import { Calendar, TrendingDown, TrendingUp, IndianRupee, Car, CreditCard, PauseCircle, ArrowDownCircle, Pencil, Check } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useUiSection } from '../../hooks/useUiSection';
 import { formatIndianCurrency, toNum } from '../../lib/utils';
@@ -10,9 +10,11 @@ import {
 import { computeLoanStats } from '../../lib/loanCalculations';
 import { buildExpenseMonthAudit } from '../../lib/auditSummaries';
 import { Card, Btn, InputField, StatCard, ProgressBar, PageHeader } from '../ui';
+import { CardBillsCard } from './CardBillsCard';
+import { ExtraExpensesCard } from './ExtraExpensesCard';
 
 export function ExpensesTab() {
-  const { data, updateFinance, generateId: genId, setActiveTab, canEdit } = useApp();
+  const { data, updateFinance, setActiveTab, canEdit } = useApp();
   const pf = data.personalFinance;
   const currentMonth = getMonthKey();
   const [expensesUi, setExpensesUi] = useUiSection('expenses');
@@ -46,28 +48,6 @@ export function ExpensesTab() {
       ...record,
       categoryAmounts: { ...record.categoryAmounts, [catId]: value === '' ? '' : value },
     });
-  };
-
-  const addExtraExpense = () => {
-    saveRecord({
-      ...record,
-      extraExpenses: [...record.extraExpenses, { id: genId(), name: 'New Expense', amount: '', category: 'other' }],
-    }, buildExpenseMonthAudit(selectedMonth, 'added extra expense'));
-  };
-
-  const updateExtra = (id, field, value) => {
-    saveRecord({
-      ...record,
-      extraExpenses: record.extraExpenses.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
-    });
-  };
-
-  const removeExtra = (id) => {
-    const name = record.extraExpenses.find((e) => e.id === id)?.name || 'expense';
-    saveRecord(
-      { ...record, extraExpenses: record.extraExpenses.filter((e) => e.id !== id) },
-      buildExpenseMonthAudit(selectedMonth, `removed ${name}`),
-    );
   };
 
   const categories = pf.expenseCategories?.length ? pf.expenseCategories : DEFAULT_EXPENSE_CATEGORIES;
@@ -306,38 +286,9 @@ export function ExpensesTab() {
         )}
       </Card>
 
-      {(canEdit || record.extraExpenses.length > 0) && (
-        <Card
-          title="One-off / Extra Expenses"
-          subtitle="Irregular items outside your monthly categories (repairs, gifts, etc.)"
-          action={canEdit ? (
-            <Btn size="sm" onClick={addExtraExpense}><Plus className="w-3 h-3 inline mr-1" />Add</Btn>
-          ) : null}
-        >
-          {record.extraExpenses.length === 0 ? (
-            <p className="text-sm text-slate-500 text-center py-4">No extra expenses this month</p>
-          ) : canEdit ? (
-            <div className="space-y-2">
-              {record.extraExpenses.map((ex) => (
-                <div key={ex.id} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
-                  <InputField label="Description" value={ex.name} onChange={(v) => updateExtra(ex.id, 'name', v)} />
-                  <InputField label="Amount" type="number" value={ex.amount ?? ''} onChange={(v) => updateExtra(ex.id, 'amount', v)} suffix="₹" />
-                  <Btn variant="danger" size="sm" onClick={() => removeExtra(ex.id)}><Trash2 className="w-4 h-4" /></Btn>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {record.extraExpenses.map((ex) => (
-                <div key={ex.id} className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                  <span className="text-sm font-medium">{ex.name}</span>
-                  <span className="text-sm font-bold text-red-500">{formatIndianCurrency(ex.amount, false)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      )}
+      <CardBillsCard selectedMonth={selectedMonth} />
+
+      <ExtraExpensesCard selectedMonth={selectedMonth} />
 
       <Card title="Month Summary">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
