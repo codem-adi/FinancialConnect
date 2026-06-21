@@ -7,7 +7,7 @@ import { AwaitingApprovalScreen } from './AwaitingApprovalScreen';
 
 export function AuthGate({ children }) {
   const apiHealth = useApiHealth();
-  const { session, loading, needsVerification, awaitingApproval } = useAuth();
+  const { session, loading, needsVerification, awaitingApproval, otpEnabled } = useAuth();
 
   if (apiHealth !== 'ok') {
     return <BackendLoadingScreen />;
@@ -17,7 +17,7 @@ export function AuthGate({ children }) {
     return <BackendLoadingScreen />;
   }
 
-  if (session?.token && needsVerification) {
+  if (session?.token && otpEnabled && needsVerification) {
     return (
       <OtpVerifyScreen
         purpose="activation"

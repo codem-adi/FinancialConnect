@@ -1,6 +1,7 @@
 import api from './api';
 
 export const authApi = {
+  config: () => api.get('/auth/config'),
   me: () => api.get('/auth/me'),
   login: (email, password) => api.post('/auth/login', { email, password }),
   signup: (payload) => api.post('/auth/signup', payload),

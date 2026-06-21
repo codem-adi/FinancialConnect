@@ -1,9 +1,16 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getAuthSession, setAuthSession, clearAuthSession } from '../lib/authStorage';
 import { otpRequest } from '../lib/apiOtp';
-import { authApi } from '../services/endpoints';
+import { authApi, appApi } from '../services/endpoints';
 
 const AuthContext = createContext(null);
+
+const DEFAULT_FEATURES = {
+  sendEmail: true,
+  otpEnabled: true,
+  passwordResetEnabled: true,
+  leaveGroupOtpEnabled: true,
+};
 
 function authError(err, fallback) {
   const data = err.response?.data || {};
@@ -20,8 +27,35 @@ function logOtpNotSent(data) {
   }
 }
 
+function normalizeAuthPayload(data, otpEnabled) {
+  const next = { ...data, token: data.token };
+  if (!otpEnabled) {
+    next.needsVerification = false;
+    if (next.user) next.user = { ...next.user, isActive: true };
+  } else {
+    next.needsVerification = data.needsVerification ?? data.user?.isActive === false;
+  }
+  return next;
+}
+
+async function loadAuthFeatures() {
+  try {
+    const { data } = await authApi.config();
+    return { ...DEFAULT_FEATURES, ...data };
+  } catch {
+    try {
+      const { data: health } = await appApi.health();
+      if (health.auth) return { ...DEFAULT_FEATURES, ...health.auth };
+    } catch {
+      /* ignore */
+    }
+  }
+  return DEFAULT_FEATURES;
+}
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => getAuthSession());
+  const [features, setFeatures] = useState(DEFAULT_FEATURES);
   const [loading, setLoading] = useState(true);
 
   const applySession = useCallback((next) => {
@@ -35,51 +69,65 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    const stored = getAuthSession();
-    if (!stored?.token) {
-      setLoading(false);
-      return;
-    }
-    authApi.me()
-      .then(({ data: me }) => {
-        applySession({ ...stored, token: stored.token, ...me });
-      })
-      .catch(() => applySession(null))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    const boot = async () => {
+      const config = await loadAuthFeatures();
+      if (!cancelled) setFeatures(config);
+
+      const stored = getAuthSession();
+      if (!stored?.token) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      try {
+        const { data: me } = await authApi.me();
+        if (!cancelled) {
+          applySession(normalizeAuthPayload(
+            { ...stored, ...me, token: stored.token },
+            config.otpEnabled,
+          ));
+        }
+      } catch {
+        if (!cancelled) applySession(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    boot();
+    return () => { cancelled = true; };
   }, [applySession]);
 
   const login = useCallback(async (email, password) => {
     try {
       const { data } = await authApi.login(email, password);
-      applySession({ ...data, token: data.token });
+      applySession(normalizeAuthPayload(data, features.otpEnabled));
       return data;
     } catch (err) {
       const data = err.response?.data;
-      if (data?.token && data?.code === 'NEEDS_VERIFICATION') {
+      if (features.otpEnabled && data?.token && data?.code === 'NEEDS_VERIFICATION') {
         logOtpNotSent(data);
-        applySession({ ...data, token: data.token, needsVerification: true });
+        applySession(normalizeAuthPayload({ ...data, needsVerification: true }, true));
         return data;
       }
       authError(err, 'Login failed');
     }
-  }, [applySession]);
+  }, [applySession, features.otpEnabled]);
 
   const signup = useCallback(async ({ email, password, name, joinCode, role }) => {
     try {
       const { data } = await authApi.signup({
         email, password, name, joinCode: joinCode || undefined, role,
       });
-      applySession({
-        ...data,
-        token: data.token,
-        needsVerification: data.needsVerification ?? data.user?.isActive === false,
-      });
+      applySession(normalizeAuthPayload(data, features.otpEnabled));
       logOtpNotSent(data);
       return data;
     } catch (err) {
       authError(err, 'Signup failed');
     }
-  }, [applySession]);
+  }, [applySession, features.otpEnabled]);
 
   const verifyOtp = useCallback(async (email, otp, purpose = 'activation') => {
     try {
@@ -128,11 +176,14 @@ export function AuthProvider({ children }) {
   const refreshSession = useCallback(async () => {
     try {
       const { data: me } = await authApi.me();
-      applySession({ ...getAuthSession(), ...me, token: getAuthSession()?.token });
+      applySession(normalizeAuthPayload(
+        { ...getAuthSession(), ...me, token: getAuthSession()?.token },
+        features.otpEnabled,
+      ));
     } catch {
       /* ignore */
     }
-  }, [applySession]);
+  }, [applySession, features.otpEnabled]);
 
   const requestLeaveGroupOtp = useCallback(async () => (
     otpRequest(authApi.leaveRequestOtp(), 'Could not send verification code')
@@ -144,7 +195,8 @@ export function AuthProvider({ children }) {
     return data;
   }, [applySession]);
 
-  const needsVerification = session?.needsVerification || session?.user?.isActive === false;
+  const otpEnabled = features.otpEnabled;
+  const needsVerification = otpEnabled && (session?.needsVerification || session?.user?.isActive === false);
   const awaitingApproval = session?.awaitingApproval;
   const isOwner = session?.role === 'owner';
 
@@ -158,6 +210,9 @@ export function AuthProvider({ children }) {
       canEdit: session?.canEdit !== false && !awaitingApproval,
       needsVerification,
       awaitingApproval,
+      otpEnabled,
+      passwordResetEnabled: features.passwordResetEnabled,
+      leaveGroupOtpEnabled: features.leaveGroupOtpEnabled,
       loading,
       login,
       loginWithOtp,

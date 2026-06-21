@@ -5,7 +5,16 @@ import { Btn, InputField, Card, OtpResendControl } from '../ui';
 import { OtpVerifyScreen } from './OtpVerifyScreen';
 
 export function AuthPage() {
-  const { login, loginWithOtp, requestLoginOtp, resendOtp, signup, forgotPassword } = useAuth();
+  const {
+    login,
+    loginWithOtp,
+    requestLoginOtp,
+    resendOtp,
+    signup,
+    forgotPassword,
+    otpEnabled,
+    passwordResetEnabled,
+  } = useAuth();
   const [mode, setMode] = useState('login');
   const [loginMethod, setLoginMethod] = useState('password');
   const [email, setEmail] = useState('');
@@ -26,6 +35,11 @@ export function AuthPage() {
       setMode('signup');
     }
   }, []);
+
+  useEffect(() => {
+    if (!otpEnabled && loginMethod !== 'password') setLoginMethod('password');
+    if (!passwordResetEnabled && (mode === 'forgot' || mode === 'reset')) setMode('login');
+  }, [otpEnabled, passwordResetEnabled, loginMethod, mode]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -127,7 +141,7 @@ export function AuthPage() {
     }
   };
 
-  if (mode === 'reset') {
+  if (mode === 'reset' && passwordResetEnabled) {
     return (
       <OtpVerifyScreen
         purpose="reset"
@@ -161,38 +175,42 @@ export function AuthPage() {
 
         {mode === 'login' && (
           <>
-            <div className="flex gap-2 mb-4 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/50">
-              <button
-                type="button"
-                onClick={() => switchLoginMethod('password')}
-                className={`flex-1 text-sm py-2 rounded-lg transition-colors ${
-                  loginMethod === 'password'
-                    ? 'bg-white dark:bg-slate-900 font-medium shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                }`}
-              >
-                Password
-              </button>
-              <button
-                type="button"
-                onClick={() => switchLoginMethod('otp')}
-                className={`flex-1 text-sm py-2 rounded-lg transition-colors ${
-                  loginMethod === 'otp'
-                    ? 'bg-white dark:bg-slate-900 font-medium shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                }`}
-              >
-                Email OTP
-              </button>
-            </div>
+            {otpEnabled && (
+              <div className="flex gap-2 mb-4 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/50">
+                <button
+                  type="button"
+                  onClick={() => switchLoginMethod('password')}
+                  className={`flex-1 text-sm py-2 rounded-lg transition-colors ${
+                    loginMethod === 'password'
+                      ? 'bg-white dark:bg-slate-900 font-medium shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Password
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchLoginMethod('otp')}
+                  className={`flex-1 text-sm py-2 rounded-lg transition-colors ${
+                    loginMethod === 'otp'
+                      ? 'bg-white dark:bg-slate-900 font-medium shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Email OTP
+                </button>
+              </div>
+            )}
 
-            {loginMethod === 'password' ? (
+            {!otpEnabled || loginMethod === 'password' ? (
               <form onSubmit={submitLogin} className="space-y-4">
                 <InputField label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
                 <InputField label="Password" type="password" value={password} onChange={setPassword} placeholder="Your password" />
-                <button type="button" onClick={() => switchMode('forgot')} className="text-xs text-indigo-400 hover:text-indigo-300">
-                  Forgot password?
-                </button>
+                {passwordResetEnabled && (
+                  <button type="button" onClick={() => switchMode('forgot')} className="text-xs text-indigo-400 hover:text-indigo-300">
+                    Forgot password?
+                  </button>
+                )}
                 {error && <p className="text-sm text-red-500">{error}</p>}
                 <Btn type="submit" className="w-full" disabled={busy}>
                   {busy ? 'Please wait…' : 'Log in'}
@@ -251,7 +269,11 @@ export function AuthPage() {
                   <option value="viewer">View only</option>
                   <option value="editor">Can edit</option>
                 </select>
-                <p className="text-xs text-slate-500 mt-1">The dashboard owner must approve your request after email verification.</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {otpEnabled
+                    ? 'The dashboard owner must approve your request after email verification.'
+                    : 'The dashboard owner must approve your request.'}
+                </p>
               </div>
             ) : (
               <p className="text-xs text-slate-500">
@@ -266,7 +288,7 @@ export function AuthPage() {
           </form>
         )}
 
-        {mode === 'forgot' && (
+        {passwordResetEnabled && mode === 'forgot' && (
           <form onSubmit={submitForgot} className="space-y-4">
             <InputField label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
             {error && <p className="text-sm text-red-500">{error}</p>}
@@ -282,10 +304,12 @@ export function AuthPage() {
 
         <p className="text-xs text-slate-500 mt-6 text-center">
           {mode === 'signup'
-            ? 'Verify your email after signup. Without a join code, a new household is created for you.'
+            ? (otpEnabled
+              ? 'Verify your email after signup. Without a join code, a new household is created for you.'
+              : 'Without a join code, a new household is created for you.')
             : mode === 'forgot'
               ? 'We\'ll email a one-time code to reset your password.'
-              : 'Log in with password or email OTP.'}
+              : (otpEnabled ? 'Log in with password or email OTP.' : 'Log in with your email and password.')}
         </p>
       </Card>
     </div>

@@ -16,7 +16,7 @@ export function LeaveGroupDialog({
   submitLabel = 'Leave group',
   onSuccess,
 }) {
-  const { user, requestLeaveGroupOtp, leaveGroup } = useAuth();
+  const { user, requestLeaveGroupOtp, leaveGroup, leaveGroupOtpEnabled } = useAuth();
   const [step, setStep] = useState('confirm');
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
@@ -55,6 +55,24 @@ export function LeaveGroupDialog({
     } finally {
       setBusy(false);
     }
+  };
+
+  const confirmLeave = async () => {
+    if (!leaveGroupOtpEnabled) {
+      setError('');
+      setBusy(true);
+      try {
+        await leaveGroup();
+        onSuccess?.();
+        onClose();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    await sendOtp();
   };
 
   const submitLeave = async () => {
@@ -97,16 +115,18 @@ export function LeaveGroupDialog({
                     Group: <strong>{householdName}</strong>
                   </p>
                 )}
-                <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
-                  You will need to verify with a one-time code sent to your email.
-                </p>
+                {leaveGroupOtpEnabled && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                    You will need to verify with a one-time code sent to your email.
+                  </p>
+                )}
               </div>
             </div>
             {error && <p className="text-sm text-red-500 mb-3">{error}</p>}
             <div className="flex gap-2 justify-end">
               <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Btn>
-              <Btn variant="danger" size="sm" onClick={sendOtp} disabled={busy}>
-                {busy ? 'Sending code…' : confirmLabel}
+              <Btn variant="danger" size="sm" onClick={confirmLeave} disabled={busy}>
+                {busy ? (leaveGroupOtpEnabled ? 'Sending code…' : 'Leaving…') : confirmLabel}
               </Btn>
             </div>
           </>
