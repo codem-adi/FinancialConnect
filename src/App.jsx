@@ -32,7 +32,7 @@ function Dashboard() {
       <Header />
       <div className="max-w-[1600px] mx-auto px-3 sm:px-6 py-4 sm:py-6 flex gap-4 sm:gap-6">
         <Sidebar />
-        <main className="flex-1 min-w-0 pb-[5.5rem] lg:pb-6">
+        <main className="flex-1 min-w-0 pb-[8.5rem] lg:pb-6">
           {!canEdit && activeTab !== 'team' && (
             <div className="mb-4">
               <ViewOnlyBanner />

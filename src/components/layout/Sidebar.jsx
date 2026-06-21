@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { LayoutDashboard, Receipt, Users, Landmark, Wallet, Target, Flame, ChevronRight, UsersRound } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { cn } from '../../lib/utils';
@@ -44,12 +45,12 @@ export function Sidebar() {
 export function MobileNav() {
   const { activeTab, setActiveTab } = useApp();
 
-  return (
+  const nav = (
     <nav
-      className="lg:hidden fixed bottom-0 inset-x-0 z-50 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)]"
+      className="lg:hidden fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_24px_rgba(15,23,42,0.08)] dark:shadow-[0_-4px_24px_rgba(0,0,0,0.35)] pb-[max(0.375rem,env(safe-area-inset-bottom))]"
       aria-label="Main navigation"
     >
-      <div className="flex overflow-x-auto gap-0.5 px-1.5 py-1.5 scrollbar-hide snap-x snap-mandatory">
+      <div className="grid grid-cols-4 gap-0.5 px-1 pt-1.5 max-w-[1600px] mx-auto">
         {mainTabs.map(({ id, shortLabel, icon: Icon }) => {
           const active = activeTab === id;
           return (
@@ -58,10 +59,10 @@ export function MobileNav() {
               type="button"
               onClick={() => setActiveTab(id)}
               className={cn(
-                'flex flex-col items-center justify-center shrink-0 min-w-[4.25rem] max-w-[4.75rem] px-1.5 py-1.5 rounded-xl snap-start transition-colors',
+                'flex flex-col items-center justify-center min-h-[3.25rem] px-1 py-1.5 rounded-xl transition-colors touch-manipulation',
                 active
                   ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
-                  : 'text-slate-500 dark:text-slate-400',
+                  : 'text-slate-500 dark:text-slate-400 active:bg-slate-100 dark:active:bg-slate-800',
               )}
             >
               <Icon className="w-5 h-5 shrink-0" />
@@ -74,4 +75,6 @@ export function MobileNav() {
       </div>
     </nav>
   );
+
+  return createPortal(nav, document.body);
 }
