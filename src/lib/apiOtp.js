@@ -2,6 +2,9 @@ import { authApi } from '../services/endpoints';
 
 export function throwOtpError(err, fallbackError = 'Request failed') {
   const data = err.response?.data || {};
+  if (data.code === 'OTP_BLOCKED' || data.code === 'OTP_COOLDOWN') {
+    console.error('[auth] Verification code was not sent:', data.error || fallbackError);
+  }
   const error = new Error(data.error || fallbackError);
   error.code = data.code;
   error.retryAfterSeconds = data.retryAfterSeconds;

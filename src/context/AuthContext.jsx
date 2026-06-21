@@ -14,6 +14,12 @@ function authError(err, fallback) {
   throw error;
 }
 
+function logOtpNotSent(data) {
+  if (data?.otpSent === false) {
+    console.error('[auth] Verification code was not sent:', data.message || data.error);
+  }
+}
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => getAuthSession());
   const [loading, setLoading] = useState(true);
@@ -50,6 +56,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       const data = err.response?.data;
       if (data?.token && data?.code === 'NEEDS_VERIFICATION') {
+        logOtpNotSent(data);
         applySession({ ...data, token: data.token, needsVerification: true });
         return data;
       }
@@ -62,7 +69,12 @@ export function AuthProvider({ children }) {
       const { data } = await authApi.signup({
         email, password, name, joinCode: joinCode || undefined, role,
       });
-      applySession({ ...data, token: data.token });
+      applySession({
+        ...data,
+        token: data.token,
+        needsVerification: data.needsVerification ?? data.user?.isActive === false,
+      });
+      logOtpNotSent(data);
       return data;
     } catch (err) {
       authError(err, 'Signup failed');

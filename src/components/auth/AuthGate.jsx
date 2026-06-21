@@ -18,7 +18,12 @@ export function AuthGate({ children }) {
   }
 
   if (session?.token && needsVerification) {
-    return <OtpVerifyScreen purpose="activation" />;
+    return (
+      <OtpVerifyScreen
+        purpose="activation"
+        initialResendCooldown={session.resendAvailableIn ?? 30}
+      />
+    );
   }
 
   if (session?.token && awaitingApproval) {
