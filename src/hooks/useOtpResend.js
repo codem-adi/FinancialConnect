@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchOtpStatus } from '../lib/api';
+import { fetchOtpStatus } from '../lib/apiOtp';
 import { formatOtpWait } from '../lib/otpResend';
 
 /**
