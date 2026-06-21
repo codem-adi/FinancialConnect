@@ -17,6 +17,7 @@ export function OtpVerifyScreen({
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
+  const [resendBlocked, setResendBlocked] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const email = emailProp || session?.user?.email || '';
@@ -71,7 +72,7 @@ export function OtpVerifyScreen({
           {purpose === 'reset' && (
             <InputField label="New password" type="password" value={newPassword} onChange={setNewPassword} placeholder="Min 6 characters" />
           )}
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && !resendBlocked && <p className="text-sm text-red-500">{error}</p>}
           <Btn type="submit" className="w-full" disabled={busy || otp.length < 6 || (purpose === 'reset' && newPassword.length < 6)}>
             {busy ? 'Verifying…' : purpose === 'reset' ? 'Reset password' : 'Activate account'}
           </Btn>
@@ -84,6 +85,7 @@ export function OtpVerifyScreen({
             active={!!email}
             onResend={() => resendOtp(email, purpose)}
             onError={setError}
+            onBlockedChange={setResendBlocked}
           />
           {(onBack || purpose === 'activation') && (
             <button

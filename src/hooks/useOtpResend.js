@@ -87,10 +87,8 @@ export function useOtpResend({ email, onResend, initialCooldown = 0, active = tr
   }, []);
 
   let label = 'Resend code';
-  if (blocked && statusMessage) {
-    label = cooldown > 0
-      ? `${statusMessage} Retry in ${formatOtpWait(cooldown)}.`
-      : statusMessage;
+  if (blocked) {
+    label = cooldown > 0 ? `Retry in ${formatOtpWait(cooldown)}` : 'Try again later';
   } else if (cooldown > 0) {
     label = `Resend code in ${formatOtpWait(cooldown)}`;
   }
