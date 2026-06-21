@@ -1,6 +1,5 @@
 import { authHeaders } from './authStorage';
-
-const API_BASE = '/api';
+import { API_BASE } from './apiBase';
 
 export async function parseOtpJson(res, fallbackError = 'Request failed') {
   const data = await res.json();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE } from '../lib/apiBase';
 
 const POLL_MS = 2000;
 
@@ -11,7 +12,7 @@ export function useApiHealth() {
 
     const check = async () => {
       try {
-        const res = await fetch('/api/health');
+        const res = await fetch(`${API_BASE}/health`);
         if (cancelled) return;
         if (res.ok) {
           setStatus('ok');

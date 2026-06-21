@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getAuthSession, setAuthSession, clearAuthSession, authHeaders } from '../lib/authStorage';
 import { parseOtpJson } from '../lib/apiOtp';
+import { API_BASE } from '../lib/apiBase';
 
 const AuthContext = createContext(null);
 
@@ -24,7 +25,7 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return;
     }
-    fetch('/api/auth/me', { headers: authHeaders() })
+    fetch(`${API_BASE}/auth/me`, { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((me) => {
         applySession({ ...stored, token: stored.token, ...me });
@@ -34,7 +35,7 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const login = useCallback(async (email, password) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, password }),
@@ -56,7 +57,7 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const signup = useCallback(async ({ email, password, name, joinCode, role }) => {
-    const res = await fetch('/api/auth/signup', {
+    const res = await fetch(`${API_BASE}/auth/signup`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, password, name, joinCode: joinCode || undefined, role }),
@@ -74,7 +75,7 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const verifyOtp = useCallback(async (email, otp, purpose = 'activation') => {
-    const res = await fetch('/api/auth/verify-otp', {
+    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, otp, purpose }),
@@ -86,7 +87,7 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const resendOtp = useCallback(async (email, purpose = 'activation') => {
-    const res = await fetch('/api/auth/resend-otp', {
+    const res = await fetch(`${API_BASE}/auth/resend-otp`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, purpose }),
@@ -95,7 +96,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const requestLoginOtp = useCallback(async (email) => {
-    const res = await fetch('/api/auth/login-otp', {
+    const res = await fetch(`${API_BASE}/auth/login-otp`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email }),
@@ -104,7 +105,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const loginWithOtp = useCallback(async (email, otp) => {
-    const res = await fetch('/api/auth/verify-otp', {
+    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, otp, purpose: 'login' }),
@@ -116,7 +117,7 @@ export function AuthProvider({ children }) {
   }, [applySession]);
 
   const forgotPassword = useCallback(async (email) => {
-    const res = await fetch('/api/auth/forgot-password', {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email }),
@@ -125,7 +126,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const resetPassword = useCallback(async (email, otp, newPassword) => {
-    const res = await fetch('/api/auth/reset-password', {
+    const res = await fetch(`${API_BASE}/auth/reset-password`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ email, otp, newPassword }),
@@ -139,14 +140,14 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => applySession(null), [applySession]);
 
   const refreshSession = useCallback(async () => {
-    const res = await fetch('/api/auth/me', { headers: authHeaders() });
+    const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
     if (!res.ok) return;
     const me = await res.json();
     applySession({ ...getAuthSession(), ...me, token: getAuthSession()?.token });
   }, [applySession]);
 
   const requestLeaveGroupOtp = useCallback(async () => {
-    const res = await fetch('/api/team/leave/request-otp', {
+    const res = await fetch(`${API_BASE}/team/leave/request-otp`, {
       method: 'POST',
       headers: authHeaders(),
     });
@@ -154,7 +155,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const leaveGroup = useCallback(async (otp) => {
-    const res = await fetch('/api/team/leave', {
+    const res = await fetch(`${API_BASE}/team/leave`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ otp }),

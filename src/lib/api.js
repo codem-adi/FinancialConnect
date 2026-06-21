@@ -1,6 +1,5 @@
 import { authHeaders, getAuthToken } from './authStorage';
-
-const API_BASE = '/api';
+import { API_BASE } from './apiBase';
 const LOCAL_KEY = 'retirewise-data';
 
 export function loadFromLocalStorage() {
