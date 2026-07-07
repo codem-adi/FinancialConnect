@@ -1,4 +1,5 @@
 import { AlertCircle } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { Btn } from './index.jsx';
 
 /** Simple yes/cancel confirmation overlay. */
@@ -14,11 +15,15 @@ export function ConfirmDialog({
 }) {
   if (!open) return null;
 
-  const text = message.startsWith('Are you sure') ? message : `Are you sure you want to ${message}?`;
+  const text = message.includes('?')
+    ? message
+    : message.startsWith('Are you sure')
+      ? message
+      : `Are you sure you want to ${message}?`;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
       onClick={onCancel}
       role="dialog"
       aria-modal="true"
@@ -38,10 +43,11 @@ export function ConfirmDialog({
           </div>
         </div>
         <div className="flex gap-2 justify-end">
-          <Btn variant="ghost" size="sm" onClick={onCancel}>{cancelLabel}</Btn>
-          <Btn variant={variant === 'danger' ? 'danger' : 'primary'} size="sm" onClick={onConfirm}>{confirmLabel}</Btn>
+          <Btn type="button" variant="ghost" size="sm" onClick={onCancel}>{cancelLabel}</Btn>
+          <Btn type="button" variant={variant === 'danger' ? 'danger' : 'primary'} size="sm" onClick={onConfirm}>{confirmLabel}</Btn>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

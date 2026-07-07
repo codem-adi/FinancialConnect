@@ -46,6 +46,51 @@ export function getPrepayments(loan) {
   }));
 }
 
+export function getDisbursements(loan) {
+  const items = (loan.disbursements || [])
+    .filter((d) => toNum(d.amount) > 0 && d.date)
+    .map((d) => ({ ...d, amount: Math.round(toNum(d.amount)) }))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (items.length > 0) return items;
+
+  const legacy = toNum(loan.disbursedAmount) || toNum(loan.loanAmount);
+  if (legacy > 0 && loan.startDate) {
+    return [{
+      id: loan.id ? `${loan.id}-legacy-disb` : 'legacy-disb',
+      date: loan.startDate,
+      amount: Math.round(legacy),
+    }];
+  }
+  return [];
+}
+
+export function getUndisbursedAmount(loan) {
+  const sanctioned = toNum(loan.totalSanctioned);
+  if (sanctioned <= 0) return 0;
+  return Math.max(0, sanctioned - getDisbursedPrincipal(loan));
+}
+
+export function getMaxDisbursementAmount(loan) {
+  return Math.max(0, Math.round(getUndisbursedAmount(loan)));
+}
+
+/** Max amount allowed when editing one draw (others unchanged). */
+export function getMaxDisbursementEditAmount(loan, disbursementId) {
+  const sanctioned = toNum(loan.totalSanctioned);
+  const disbursements = getDisbursements(loan);
+  const otherTotal = disbursements
+    .filter((d) => d.id !== disbursementId)
+    .reduce((sum, d) => sum + toNum(d.amount), 0);
+  if (sanctioned <= 0) return Number.MAX_SAFE_INTEGER;
+  return Math.max(0, Math.round(sanctioned - otherTotal));
+}
+
+export function getDisbursementProgressPct(loan) {
+  const sanctioned = toNum(loan.totalSanctioned);
+  if (sanctioned <= 0) return 0;
+  return Math.min(100, (getDisbursedPrincipal(loan) / sanctioned) * 100);
+}
+
 export const EMI_BASIS = {
   disbursed: {
     id: 'disbursed',
@@ -61,8 +106,10 @@ export const EMI_BASIS = {
 
 export const MAX_TENURE_MONTHS = 35 * 12; // 35 years
 
-/** Principal actually drawn — used for outstanding balance & amortization */
+/** Principal actually drawn — sum of disbursement entries */
 export function getDisbursedPrincipal(loan) {
+  const fromEntries = getDisbursements(loan).reduce((sum, d) => sum + toNum(d.amount), 0);
+  if (fromEntries > 0) return fromEntries;
   return toNum(loan.disbursedAmount) || toNum(loan.loanAmount) || 0;
 }
 
@@ -94,10 +141,10 @@ function emiDateForMonth(startDate, monthIndex) {
 }
 
 /** EMIs elapsed since start — always auto from start date */
-export function getPaidEmiCount(loan) {
+export function getPaidEmiCount(loan, asOfDate = new Date()) {
   if (!loan.startDate) return 0;
   const tenure = toNum(loan.tenureMonths);
-  return Math.min(tenure, getMonthsSinceStart(loan.startDate));
+  return Math.min(tenure, getMonthsSinceStart(loan.startDate, asOfDate));
 }
 
 export function formatManualEmiPaymentsSummary(loan) {
@@ -163,6 +210,83 @@ export function getManualEmi(loan) {
   return getManualPaymentForMonth(loan, idx) ?? getManualPaymentForMonth(loan, idx - 1);
 }
 
+export const EMI_MONTH_STATUS = {
+  paid: { id: 'paid', label: 'Paid' },
+  unpaid: { id: 'unpaid', label: 'EMI not paid', description: 'Interest charged — no EMI credited this month' },
+};
+
+export function getEmiMonthStatuses(loan) {
+  return loan.emiMonthStatuses && typeof loan.emiMonthStatuses === 'object'
+    ? loan.emiMonthStatuses
+    : {};
+}
+
+export function getEmiMonthStatus(loan, monthIndex) {
+  const status = getEmiMonthStatuses(loan)[String(monthIndex)];
+  if (status === 'unpaid' || status === 'skipped' || status === 'bounced') return 'unpaid';
+  return 'paid';
+}
+
+export function updateEmiMonthStatus(loan, monthIndex, status) {
+  const statuses = { ...getEmiMonthStatuses(loan) };
+  const key = String(monthIndex);
+  if (!status || status === 'paid') {
+    delete statuses[key];
+  } else {
+    statuses[key] = 'unpaid';
+  }
+  return { ...loan, emiMonthStatuses: statuses };
+}
+
+/** EMI month index for the current cycle (null if no EMI is due yet). */
+export function getCurrentEmiMonthIndex(loan, asOfDate = new Date()) {
+  if (!loan.startDate) return null;
+  const tenure = toNum(loan.tenureMonths);
+  if (tenure <= 0) return null;
+
+  const count = getPaidEmiCount(loan, asOfDate);
+  if (count <= 0) return null;
+
+  const monthIndex = Math.min(count - 1, tenure - 1);
+  const emiDate = emiDateForMonth(loan.startDate, monthIndex);
+  const today = (asOfDate instanceof Date ? asOfDate : new Date(asOfDate)).toISOString().split('T')[0];
+  if (today < emiDate) return null;
+
+  return monthIndex;
+}
+
+export function getEmiDueDateForMonth(loan, monthIndex) {
+  return emiDateForMonth(loan.startDate, monthIndex);
+}
+
+/** Apply one EMI month to outstanding principal — respects skip/bounce */
+function processEmiMonth(principal, loan, monthIndex, scheduledEmi, annualRate) {
+  const status = getEmiMonthStatus(loan, monthIndex);
+  const manualAmt = getManualPaymentForMonth(loan, monthIndex);
+  const breakdown = computePaymentBreakdown(principal, scheduledEmi, annualRate, manualAmt);
+  const interest = breakdown.interestPortion;
+
+  if (status === 'paid') {
+    return {
+      status,
+      interest,
+      payment: breakdown.monthlyPayment,
+      principalReduction: breakdown.totalPrincipal,
+      newPrincipal: Math.max(0, principal - breakdown.totalPrincipal),
+      breakdown,
+    };
+  }
+
+  return {
+    status,
+    interest,
+    payment: 0,
+    principalReduction: 0,
+    newPrincipal: Math.max(0, principal + interest),
+    breakdown,
+  };
+}
+
 /** Split a monthly payment into interest, scheduled principal, and extra principal */
 export function computePaymentBreakdown(outstanding, scheduledEmi, annualRate, manualAmount = null) {
   const monthlyRate = toNum(annualRate) / 100 / 12;
@@ -210,6 +334,26 @@ export function computeMonthlyPaymentBreakdown(loan, outstanding, scheduledEmi, 
   return computePaymentBreakdown(outstanding, scheduledEmi, annualRate, manual);
 }
 
+function applyDisbursementsInMonth(loan, month, balance, allDisbursements, appliedIds) {
+  let disbursementTotal = 0;
+  if (!loan.startDate) return { balance, disbursementTotal };
+
+  const { monthStart, monthEnd } = monthWindow(loan.startDate, month);
+  for (const d of allDisbursements) {
+    const key = d.id || `${d.date}-${d.amount}`;
+    if (appliedIds.has(key)) continue;
+    const dDate = new Date(d.date);
+    if (isNaN(dDate.getTime())) continue;
+    if (dDate >= monthStart && dDate < monthEnd) {
+      const amt = toNum(d.amount);
+      balance += amt;
+      disbursementTotal += amt;
+      appliedIds.add(key);
+    }
+  }
+  return { balance, disbursementTotal };
+}
+
 function applyPrepaymentsInMonth(loan, month, balance, allPrepayments, appliedIds) {
   let prepaymentTotal = 0;
   if (!loan.startDate) return { balance, prepaymentTotal };
@@ -243,38 +387,50 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     .filter((p) => toNum(p.amount) > 0)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
+  const allDisbursements = getDisbursements(loan);
   const emisPaid = getPaidEmiCount(loan);
   const paidEmis = Math.min(emisPaid, tenure);
 
-  let balance = disbursedPrincipal;
+  let balance = 0;
   let interestPaid = 0;
   let principalFromEmi = 0;
   let prepaymentTotal = 0;
-  const appliedIds = new Set();
+  const appliedPrepIds = new Set();
+  const appliedDisbIds = new Set();
   const scheduledEmi = Math.round(originalEmi);
 
-  for (let month = 0; month < paidEmis && balance > 0; month++) {
-    const manualAmt = getManualPaymentForMonth(loan, month);
-    const breakdown = computePaymentBreakdown(balance, scheduledEmi, defaultRate, manualAmt);
-    interestPaid += breakdown.interestPortion;
-    principalFromEmi += breakdown.totalPrincipal;
-    balance = Math.max(0, balance - breakdown.totalPrincipal);
+  for (let month = 0; month < paidEmis; month++) {
+    const disb = applyDisbursementsInMonth(loan, month, balance, allDisbursements, appliedDisbIds);
+    balance = disb.balance;
+    if (balance <= 0) continue;
 
-    const prep = applyPrepaymentsInMonth(loan, month, balance, allPrepayments, appliedIds);
+    const monthResult = processEmiMonth(balance, loan, month, scheduledEmi, defaultRate);
+    interestPaid += monthResult.interest;
+    principalFromEmi += monthResult.principalReduction;
+    balance = monthResult.newPrincipal;
+
+    const prep = applyPrepaymentsInMonth(loan, month, balance, allPrepayments, appliedPrepIds);
     balance = prep.balance;
     prepaymentTotal += prep.prepaymentTotal;
+  }
+
+  for (const d of allDisbursements) {
+    const key = d.id || `${d.date}-${d.amount}`;
+    if (!appliedDisbIds.has(key)) {
+      balance += toNum(d.amount);
+      appliedDisbIds.add(key);
+    }
   }
 
   // Prepayments after EMI period or with future dates relative to paid EMIs
   for (const pp of allPrepayments) {
     const key = pp.id || `${pp.date}-${pp.amount}`;
-    if (appliedIds.has(key)) continue;
-    const ppDate = new Date(pp.date);
+    if (appliedPrepIds.has(key)) continue;
     const amt = Math.min(toNum(pp.amount), balance);
     if (amt > 0) {
       balance -= amt;
       prepaymentTotal += amt;
-      appliedIds.add(key);
+      appliedPrepIds.add(key);
     }
   }
 
@@ -387,12 +543,11 @@ export function getEmiMonthIndex(loan, date) {
 
 /** Outstanding balance at a date (EMIs + prior prepayments applied; optionally exclude one prepayment id) */
 export function getBalanceAtDate(loan, targetDate, excludePrepaymentIds = []) {
-  const disbursedPrincipal = getDisbursedPrincipal(loan);
   const defaultRate = toNum(loan.interestRate);
   const tenure = toNum(loan.tenureMonths);
   const originalEmi = calculateEMI(getEmiPrincipal(loan), defaultRate, tenure);
   const target = new Date(targetDate);
-  if (isNaN(target.getTime())) return disbursedPrincipal;
+  if (isNaN(target.getTime())) return getDisbursedPrincipal(loan);
 
   const excludeSet = new Set(excludePrepaymentIds.filter(Boolean));
   const allPrepayments = getPrepayments(loan)
@@ -400,26 +555,40 @@ export function getBalanceAtDate(loan, targetDate, excludePrepaymentIds = []) {
     .filter((p) => toNum(p.amount) > 0 && new Date(p.date) <= target)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  if (!loan.startDate) return disbursedPrincipal;
+  const allDisbursements = getDisbursements(loan)
+    .filter((d) => new Date(d.date) <= target);
+
+  if (!loan.startDate) return allDisbursements.reduce((s, d) => s + toNum(d.amount), 0);
 
   const targetMonthIndex = getMonthsSinceStart(loan.startDate, target);
   const monthsToRun = Math.min(tenure, targetMonthIndex + 1);
 
-  let balance = disbursedPrincipal;
-  const appliedIds = new Set();
+  let balance = 0;
+  const appliedPrepIds = new Set();
+  const appliedDisbIds = new Set();
 
-  for (let month = 0; month < monthsToRun && balance > 0; month++) {
-    const manualAmt = getManualPaymentForMonth(loan, month);
-    const breakdown = computePaymentBreakdown(balance, Math.round(originalEmi), defaultRate, manualAmt);
-    balance = Math.max(0, balance - breakdown.totalPrincipal);
+  for (let month = 0; month < monthsToRun; month++) {
+    const disb = applyDisbursementsInMonth(loan, month, balance, allDisbursements, appliedDisbIds);
+    balance = disb.balance;
+    if (balance <= 0) continue;
 
-    const prep = applyPrepaymentsInMonth(loan, month, balance, allPrepayments, appliedIds);
+    const monthResult = processEmiMonth(balance, loan, month, Math.round(originalEmi), defaultRate);
+    balance = monthResult.newPrincipal;
+
+    const prep = applyPrepaymentsInMonth(loan, month, balance, allPrepayments, appliedPrepIds);
     balance = prep.balance;
+  }
+
+  for (const d of allDisbursements) {
+    const key = d.id || `${d.date}-${d.amount}`;
+    if (!appliedDisbIds.has(key)) {
+      balance += toNum(d.amount);
+    }
   }
 
   for (const pp of allPrepayments) {
     const key = pp.id || `${pp.date}-${pp.amount}`;
-    if (!appliedIds.has(key)) {
+    if (!appliedPrepIds.has(key)) {
       balance -= Math.min(toNum(pp.amount), balance);
     }
   }
@@ -631,14 +800,105 @@ export function previewPrepayment(loan, prepayment) {
 }
 
 export function previewDisbursement(loan) {
+  const remaining = getMaxDisbursementAmount(loan);
+  return previewPartialDisbursement(loan, remaining, new Date().toISOString().split('T')[0]);
+}
+
+export function previewPartialDisbursement(loan, amount, date) {
   const before = simulateAmortization(loan);
-  const amt = toNum(loan.totalSanctioned) || toNum(loan.loanAmount);
-  const after = simulateAmortization({ ...loan, disbursedAmount: amt, loanAmount: amt });
+  const amt = Math.min(toNum(amount), getMaxDisbursementAmount(loan));
+  const entry = { id: 'preview', date, amount: amt };
+  const previewLoan = applyDisbursement(loan, entry);
+  const after = simulateAmortization(previewLoan);
   return {
     before,
     after,
-    disbursedAmount: amt,
+    disbursementAmount: amt,
+    newDisbursedTotal: getDisbursedPrincipal(previewLoan),
+    undisbursedAfter: getUndisbursedAmount(previewLoan),
+    disbursedPct: getDisbursementProgressPct(previewLoan),
   };
+}
+
+export function applyDisbursement(loan, disbursement) {
+  const amt = Math.round(toNum(disbursement.amount));
+  if (amt <= 0) return loan;
+
+  const capped = Math.min(amt, getMaxDisbursementAmount(loan));
+  if (capped <= 0) return loan;
+
+  const entry = {
+    ...disbursement,
+    amount: capped,
+    type: 'disbursement',
+  };
+
+  const base = getDisbursements(loan).filter((d) => d.id !== entry.id);
+  const disbursements = [...base, entry];
+  const total = disbursements.reduce((s, d) => s + toNum(d.amount), 0);
+  const updated = {
+    ...loan,
+    disbursements,
+    disbursedAmount: total,
+    loanAmount: total,
+  };
+
+  const fixedEmi = Math.round(calculateEMI(getEmiPrincipal(updated), toNum(updated.interestRate), toNum(updated.tenureMonths)));
+  return { ...updated, emi: fixedEmi };
+}
+
+function finalizeLoanAfterDisbursementChange(loan, disbursements) {
+  const total = disbursements.reduce((sum, d) => sum + toNum(d.amount), 0);
+  const updated = {
+    ...loan,
+    disbursements,
+    disbursedAmount: total,
+    loanAmount: total,
+  };
+  const fixedEmi = Math.round(calculateEMI(getEmiPrincipal(updated), toNum(updated.interestRate), toNum(updated.tenureMonths)));
+  const stats = simulateAmortization(updated);
+  return {
+    ...updated,
+    emi: fixedEmi,
+    status: stats.isClosed ? 'closed' : (loan.status === 'closed' && !stats.isClosed ? 'active' : loan.status),
+  };
+}
+
+export function previewDisbursementEdit(loan, disbursementId, amount, date) {
+  const before = simulateAmortization(loan);
+  const previewLoan = updateDisbursement(loan, disbursementId, { amount, date });
+  const after = simulateAmortization(previewLoan);
+  const capped = Math.min(Math.round(toNum(amount)), getMaxDisbursementEditAmount(loan, disbursementId));
+  return {
+    before,
+    after,
+    disbursementAmount: capped,
+    maxAllowed: getMaxDisbursementEditAmount(loan, disbursementId),
+    disbursedPct: getDisbursementProgressPct(previewLoan),
+    undisbursedAfter: getUndisbursedAmount(previewLoan),
+  };
+}
+
+export function updateDisbursement(loan, disbursementId, updates) {
+  const maxAllowed = getMaxDisbursementEditAmount(loan, disbursementId);
+  const disbursements = getDisbursements(loan).map((d) => {
+    if (d.id !== disbursementId) return d;
+    const amt = Math.min(Math.round(toNum(updates.amount ?? d.amount)), maxAllowed);
+    return {
+      ...d,
+      ...updates,
+      amount: amt > 0 ? amt : d.amount,
+      date: updates.date || d.date,
+      type: 'disbursement',
+    };
+  });
+  return finalizeLoanAfterDisbursementChange(loan, disbursements);
+}
+
+export function removeDisbursement(loan, disbursementId) {
+  const disbursements = getDisbursements(loan).filter((d) => d.id !== disbursementId);
+  if (disbursements.length === 0) return loan;
+  return finalizeLoanAfterDisbursementChange(loan, disbursements);
 }
 
 /** Credit card & bill stats */
@@ -707,6 +967,8 @@ export function createEmptyLoan(id) {
     startDate: new Date().toISOString().split('T')[0],
     status: 'active',
     manualEmiPayments: [],
+    emiMonthStatuses: {},
+    disbursements: [],
     prepayments: [],
     creditLimit: '',
     statementBalance: '',
@@ -739,6 +1001,17 @@ export function normalizeLoan(loan) {
     date: clampManualEmiDate(p.date, { startDate: loan.startDate }),
   }));
 
+  const disbursements = (loan.disbursements || [])
+    .filter((d) => toNum(d.amount) > 0 && d.date)
+    .map((d) => ({ ...d, amount: Math.round(toNum(d.amount)) }))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const migratedDisbursements = disbursements.length > 0
+    ? disbursements
+    : migrateLegacyDisbursements(loan, disbursed);
+
+  const disbursedTotal = migratedDisbursements.reduce((s, d) => s + toNum(d.amount), 0) || disbursed;
+
   return {
     ...createEmptyLoan(loan.id || 'temp'),
     ...loan,
@@ -746,13 +1019,25 @@ export function normalizeLoan(loan) {
     emiBasis: loan.emiBasis || 'disbursed',
     tenureMonths: tenure,
     totalSanctioned: loan.totalSanctioned ?? '',
-    disbursedAmount: disbursed || loan.disbursedAmount || '',
-    loanAmount: disbursed || loan.loanAmount || loan.disbursedAmount || '',
+    disbursedAmount: disbursedTotal || loan.disbursedAmount || '',
+    loanAmount: disbursedTotal || loan.loanAmount || loan.disbursedAmount || '',
     prepayments: getPrepayments(loan),
+    disbursements: migratedDisbursements,
     manualEmiPayments,
+    emiMonthStatuses: getEmiMonthStatuses(loan),
     manualEmi: '',
     emisPaid: null,
   };
+}
+
+function migrateLegacyDisbursements(loan, disbursedAmount) {
+  const amt = Math.round(toNum(disbursedAmount));
+  if (amt <= 0 || !loan.startDate) return [];
+  return [{
+    id: loan.id ? `${loan.id}-legacy-disb` : 'legacy-disb',
+    date: loan.startDate,
+    amount: amt,
+  }];
 }
 
 export function applyPrepayment(loan, prepayment) {
@@ -798,9 +1083,18 @@ export function getMaxPrepaymentAmount(loan, date, excludePrepaymentId = null) {
   return Math.max(0, Math.round(getBalanceAtDate(loan, date, exclude)));
 }
 
+function statementSortKey(dateStr, offsetMs = 0) {
+  const parts = String(dateStr).slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) {
+    return new Date(dateStr).getTime() + offsetMs;
+  }
+  const [year, month, day] = parts;
+  return new Date(year, month - 1, day).getTime() + offsetMs;
+}
+
 /**
- * Bank-style loan ledger: interest debited first, then EMI/prepayment credited.
- * Each EMI period shows opening balance, transactions, interest/principal split, closing balance.
+ * Liability balance is negative: disbursement opens at −disbursed;
+ * interest debits increase what you owe; EMI/prepayment credits reduce it.
  */
 export function buildLoanBankStatement(loan) {
   const disbursedPrincipal = getDisbursedPrincipal(loan);
@@ -809,62 +1103,115 @@ export function buildLoanBankStatement(loan) {
   const rate = toNum(loan.interestRate);
   const tenure = toNum(loan.tenureMonths);
   const scheduledEmi = Math.round(calculateEMI(getEmiPrincipal(loan), rate, tenure));
-  const emisPaid = getPaidEmiCount(loan);
-  const paidEmiMonths = Math.min(tenure, Math.max(emisPaid, 0));
+  const paidEmiMonths = Math.min(tenure, Math.max(getPaidEmiCount(loan), 0));
 
+  const disbursements = getDisbursements(loan);
   const prepayments = getPrepayments(loan)
     .filter((p) => toNum(p.amount) > 0)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  const entries = [];
-  let balance = disbursedPrincipal;
+  const lines = [];
   const appliedPrepIds = new Set();
+  const appliedDisbIds = new Set();
+  let principal = 0;
+  let disbSeq = 0;
+  let disbSortIndex = 0;
 
-  for (let month = 0; month < paidEmiMonths && balance > 0; month++) {
+  const pushLine = (line) => {
+    const offsetMs = line.sortOffsetMs || 0;
+    lines.push({
+      debit: 0,
+      credit: 0,
+      emiMonth: null,
+      emiStatus: null,
+      sortOffsetMs: 0,
+      sortSubOrder: 0,
+      ...line,
+      sortOrder: statementSortKey(line.date, offsetMs),
+    });
+  };
+
+  const pushDisbursementLine = (d, amt, balance) => {
+    disbSortIndex += 1;
+    disbSeq += 1;
+    const key = d.id || `${d.date}-${d.amount}`;
+    pushLine({
+      id: `disb-${key}`,
+      date: d.date,
+      sortOffsetMs: disbSortIndex * 60 * 1000,
+      sortSubOrder: disbSortIndex,
+      txnType: 'disbursement',
+      particulars: disbSeq === 1 ? 'Loan Disbursement' : 'Tranche Disbursement',
+      subLabel: d.notes || (disbSeq > 1 ? `Draw #${disbSeq}` : undefined),
+      debit: amt,
+      balance,
+    });
+    appliedDisbIds.add(key);
+  };
+
+  for (let month = 0; month < paidEmiMonths; month++) {
+    if (loan.startDate) {
+      const { monthStart, monthEnd } = monthWindow(loan.startDate, month);
+      for (const d of disbursements) {
+        const key = d.id || `${d.date}-${d.amount}`;
+        if (appliedDisbIds.has(key)) continue;
+        const dDate = new Date(d.date);
+        if (isNaN(dDate.getTime())) continue;
+        if (dDate >= monthStart && dDate < monthEnd) {
+          const amt = toNum(d.amount);
+          principal += amt;
+          pushDisbursementLine(d, amt, -principal);
+        }
+      }
+    }
+
+    if (principal <= 0) continue;
+
     const emiDate = emiDateForMonth(loan.startDate, month);
-    const openingBalance = Math.round(balance);
-    const manualAmt = getManualPaymentForMonth(loan, month);
-    const breakdown = computePaymentBreakdown(balance, scheduledEmi, rate, manualAmt);
-    const interest = breakdown.interestPortion;
-    const principal = breakdown.totalPrincipal;
-    const closingBalance = Math.max(0, openingBalance - principal);
+    const result = processEmiMonth(principal, loan, month, scheduledEmi, rate);
+    const interestLabel = result.status === 'unpaid'
+      ? 'Interest Charged — EMI Not Paid'
+      : 'Interest Charged';
+    const balanceAfterInterest = -(principal + result.interest);
 
-    const transactions = [
-      {
-        label: 'Interest',
-        type: 'debit',
-        amount: interest,
-        description: 'Interest charged on outstanding principal',
-      },
-      {
-        label: breakdown.hasManualEmi && breakdown.monthlyPayment > scheduledEmi ? 'Payment' : 'EMI',
-        type: 'credit',
-        amount: breakdown.monthlyPayment,
-        description: breakdown.hasManualEmi
-          ? `Your payment (bank EMI ${scheduledEmi})`
-          : 'EMI received',
-      },
-    ];
-
-    entries.push({
-      id: `emi-${month}`,
+    pushLine({
+      id: `int-${month}`,
       date: emiDate,
-      tag: 'emi',
+      sortOffsetMs: 0,
+      sortSubOrder: 1,
+      txnType: 'interest',
+      particulars: interestLabel,
+      subLabel: `EMI #${month + 1}`,
+      debit: result.interest,
+      balance: balanceAfterInterest,
       emiMonth: month + 1,
-      openingBalance,
-      interest,
-      principal: breakdown.scheduledPrincipal,
-      extraPrincipal: breakdown.extraPrincipal,
-      totalPrincipal: principal,
-      payment: breakdown.monthlyPayment,
-      scheduledEmi,
-      hasManualEmi: breakdown.hasManualEmi,
-      transactions,
-      closingBalance,
-      balanceAfterInterest: openingBalance + interest,
+      emiMonthIndex: month,
+      emiStatus: result.status,
     });
 
-    balance = closingBalance;
+    if (result.status === 'paid' && result.payment > 0) {
+      principal = result.newPrincipal;
+      pushLine({
+        id: `emi-${month}`,
+        date: emiDate,
+        sortOffsetMs: 5 * 60 * 1000,
+        sortSubOrder: 2,
+        txnType: 'emi',
+        particulars: result.breakdown.hasManualEmi && result.payment > scheduledEmi
+          ? 'Payment Received'
+          : 'EMI Received',
+        subLabel: `EMI #${month + 1}`,
+        credit: result.payment,
+        balance: -principal,
+        emiMonth: month + 1,
+        emiMonthIndex: month,
+        emiStatus: 'paid',
+        principal: result.breakdown.scheduledPrincipal,
+        extraPrincipal: result.breakdown.extraPrincipal,
+      });
+    } else if (result.status === 'unpaid') {
+      principal = result.newPrincipal;
+    }
 
     if (loan.startDate) {
       const { monthStart, monthEnd } = monthWindow(loan.startDate, month);
@@ -874,33 +1221,20 @@ export function buildLoanBankStatement(loan) {
         const ppDate = new Date(pp.date);
         if (isNaN(ppDate.getTime())) continue;
         if (ppDate >= monthStart && ppDate < monthEnd) {
-          const prepayOpening = Math.round(balance);
-          const amt = Math.min(toNum(pp.amount), balance);
+          const amt = Math.min(toNum(pp.amount), principal);
           if (amt <= 0) continue;
-          balance -= amt;
-          entries.push({
+          principal = Math.max(0, principal - amt);
+          pushLine({
             id: `prepay-${pp.id || key}`,
             date: pp.date,
-            tag: 'prepayment',
+            sortOffsetMs: 10 * 60 * 1000,
+            sortSubOrder: 3,
+            txnType: 'prepayment',
+            particulars: 'Prepayment Received',
+            credit: amt,
+            balance: -principal,
             emiMonth: month + 1,
-            openingBalance: prepayOpening,
-            interest: 0,
-            principal: amt,
-            extraPrincipal: 0,
-            totalPrincipal: amt,
-            payment: amt,
-            scheduledEmi: 0,
-            hasManualEmi: false,
             notes: pp.notes,
-            transactions: [
-              {
-                label: 'Prepayment',
-                type: 'credit',
-                amount: amt,
-                description: 'Additional principal payment',
-              },
-            ],
-            closingBalance: Math.round(balance),
           });
           appliedPrepIds.add(key);
         }
@@ -908,39 +1242,39 @@ export function buildLoanBankStatement(loan) {
     }
   }
 
+  for (const d of disbursements) {
+    const key = d.id || `${d.date}-${d.amount}`;
+    if (appliedDisbIds.has(key)) continue;
+    const amt = toNum(d.amount);
+    if (amt <= 0) continue;
+    principal += amt;
+    pushDisbursementLine(d, amt, -principal);
+  }
+
   for (const pp of prepayments) {
     const key = pp.id || `${pp.date}-${pp.amount}`;
     if (appliedPrepIds.has(key)) continue;
-    const prepayOpening = Math.round(balance);
-    const amt = Math.min(toNum(pp.amount), balance);
+    const amt = Math.min(toNum(pp.amount), principal);
     if (amt <= 0) continue;
-    balance -= amt;
-    entries.push({
+    principal = Math.max(0, principal - amt);
+    pushLine({
       id: `prepay-${pp.id || key}`,
       date: pp.date,
-      tag: 'prepayment',
+      sortOffsetMs: 10 * 60 * 1000,
+      sortSubOrder: 3,
+      txnType: 'prepayment',
+      particulars: 'Prepayment Received',
+      credit: amt,
+      balance: -principal,
       emiMonth: getEmiMonthIndex(loan, pp.date),
-      openingBalance: prepayOpening,
-      interest: 0,
-      principal: amt,
-      extraPrincipal: 0,
-      totalPrincipal: amt,
-      payment: amt,
-      scheduledEmi: 0,
-      hasManualEmi: false,
       notes: pp.notes,
-      transactions: [
-        {
-          label: 'Prepayment',
-          type: 'credit',
-          amount: amt,
-          description: 'Additional principal payment',
-        },
-      ],
-      closingBalance: Math.round(balance),
     });
     appliedPrepIds.add(key);
   }
 
-  return entries.sort((a, b) => new Date(b.date) - new Date(a.date) || (b.emiMonth - a.emiMonth));
+  return lines.sort((a, b) => {
+    const byTime = b.sortOrder - a.sortOrder;
+    if (byTime !== 0) return byTime;
+    return (b.sortSubOrder || 0) - (a.sortSubOrder || 0);
+  });
 }

@@ -1,5 +1,5 @@
 import { formatIndianCurrency, toNum, formatRate } from './utils';
-import { LOAN_TYPES, normalizeLoan, formatManualEmiPaymentsSummary } from './loanCalculations';
+import { LOAN_TYPES, normalizeLoan, formatManualEmiPaymentsSummary, applyDisbursement, getDisbursementProgressPct } from './loanCalculations';
 import { formatMonthLabel } from './financeStats';
 
 function money(v) {
@@ -75,13 +75,47 @@ export function buildPrepaymentAudit(loan, prepayment, action = 'create') {
   };
 }
 
+export function buildDisbursementUpdateAudit(loan, before, after) {
+  const l = normalizeLoan(loan);
+  return {
+    section: 'loans',
+    action: 'update',
+    entityId: l.id,
+    summary: `Updated draw on ${l.name}: ${money(before.amount)} → ${money(after.amount)} (${after.date})`,
+    details: after.notes || null,
+  };
+}
+
+export function buildDisbursementDeleteAudit(loan, disbursement) {
+  const l = normalizeLoan(loan);
+  return {
+    section: 'loans',
+    action: 'delete',
+    entityId: l.id,
+    summary: `Removed draw on ${l.name}: ${money(disbursement.amount)} (${disbursement.date})`,
+    details: disbursement.notes || null,
+  };
+}
+
+export function buildPartialDisburseAudit(loan, disbursement) {
+  const l = normalizeLoan(loan);
+  const pct = getDisbursementProgressPct(applyDisbursement(loan, disbursement));
+  return {
+    section: 'loans',
+    action: 'update',
+    entityId: l.id,
+    summary: `Disbursement on ${l.name}: ${money(disbursement.amount)} (${disbursement.date}) · ${pct.toFixed(1)}% drawn`,
+    details: disbursement.notes || null,
+  };
+}
+
 export function buildDisburseAudit(loan, amount) {
   const l = normalizeLoan(loan);
   return {
     section: 'loans',
     action: 'update',
     entityId: l.id,
-    summary: `Full disbursement on ${l.name}: ${money(amount)}`,
+    summary: `Disbursement on ${l.name}: ${money(amount)}`,
   };
 }
 

@@ -1,15 +1,21 @@
-import { Moon, Sun, Download, Upload, TrendingUp, LogOut, Eye } from 'lucide-react';
+import { useState } from 'react';
+import { TrendingUp, Eye } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLogoutConfirm } from '../../hooks/useLogoutConfirm';
 import { exportJSON, importJSON } from '../../lib/api';
 import { NotificationsDropdown } from '../notifications/NotificationsDropdown';
-import { Btn } from '../ui';
+import { SettingsDropdown } from './SettingsDropdown';
 
 export function Header() {
   const { data, toggleTheme, importData, setActiveTab, canEdit } = useApp();
   const { user, role, isOwner, household } = useAuth();
   const { requestLogout, LogoutConfirmDialog } = useLogoutConfirm();
+  const [openPanel, setOpenPanel] = useState(null);
+
+  const setPanel = (panel) => {
+    setOpenPanel((current) => (current === panel ? null : panel));
+  };
 
   const handleImport = () => {
     if (!isOwner) return;
@@ -32,35 +38,46 @@ export function Header() {
   return (
     <>
       {LogoutConfirmDialog}
-    <header className="sticky top-0 z-50 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
-      <div className="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-            <TrendingUp className="w-5 h-5 text-white" />
+      <header className="sticky top-0 z-50 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
+        <div className="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0">
+              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="font-bold text-base sm:text-lg leading-tight truncate">RetireWise</h1>
+              <p className="text-[10px] sm:text-xs text-slate-500 hidden sm:block truncate">
+                {household?.name || user?.name || 'Personal Finance'} · {role}
+                {!canEdit && (
+                  <span className="text-amber-600 ml-1">
+                    <Eye className="w-3 h-3 inline" /> view only
+                  </span>
+                )}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-bold text-lg leading-tight">RetireWise</h1>
-            <p className="text-xs text-slate-500 hidden sm:block">
-              {household?.name || user?.name || 'Personal Finance'} · {role}
-              {!canEdit && <span className="text-amber-600 ml-1"><Eye className="w-3 h-3 inline" /> view only</span>}
-            </p>
+          <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+            <NotificationsDropdown
+              open={openPanel === 'notifications'}
+              onOpenChange={(next) => setOpenPanel(next ? 'notifications' : null)}
+              onOpenTeam={() => setActiveTab('team')}
+            />
+            <SettingsDropdown
+              open={openPanel === 'settings'}
+              onOpenChange={(next) => setOpenPanel(next ? 'settings' : null)}
+              theme={data.theme}
+              onToggleTheme={toggleTheme}
+              isOwner={isOwner}
+              canEdit={canEdit}
+              role={role}
+              householdName={household?.name || user?.name}
+              onExport={() => exportJSON(data)}
+              onImport={handleImport}
+              onRequestLogout={requestLogout}
+            />
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <NotificationsDropdown onOpenTeam={() => setActiveTab('team')} />
-          {isOwner && (
-            <>
-              <Btn variant="ghost" size="sm" onClick={() => exportJSON(data)} title="Export dashboard"><Download className="w-4 h-4" /></Btn>
-              <Btn variant="ghost" size="sm" onClick={handleImport} title="Import dashboard"><Upload className="w-4 h-4" /></Btn>
-            </>
-          )}
-          <Btn variant="ghost" size="sm" onClick={toggleTheme}>
-            {data.theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </Btn>
-          <Btn variant="ghost" size="sm" onClick={requestLogout} title="Log out"><LogOut className="w-4 h-4" /></Btn>
-        </div>
-      </div>
-    </header>
+      </header>
     </>
   );
 }

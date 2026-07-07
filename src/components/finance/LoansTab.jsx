@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus, Trash2, Pencil, X, Banknote, ArrowDownCircle, CreditCard,
   Clock, TrendingDown, IndianRupee, ChevronDown, ChevronUp, AlertCircle, ScrollText, Star,
@@ -8,16 +9,21 @@ import { useUiSection } from '../../hooks/useUiSection';
 import { formatIndianCurrency, formatPercent, formatRate, formatMonthlyRate, sanitizeNumbers, toNum, cn } from '../../lib/utils';
 import {
   computeLoanStats, createEmptyLoan, normalizeLoan, LOAN_TYPES, calculateEMI,
-  previewDisbursement, applyPrepayment, updatePrepayment, removePrepayment,
+  applyPrepayment, updatePrepayment, removePrepayment,
   previewPrepaymentImpact, getPrepaymentSavingsReport,
   calculateInterestSavedForDate, getPrepayments, formatPayoffAcceleration, formatDuration,
   getEmiPrincipal, getDisbursedPrincipal, EMI_BASIS, getLoanMonthlyOutflow,
   computeMonthlyPaymentBreakdown, buildLoanBankStatement, getMaxPrepaymentAmount,
   getManualEmiPayments, getPaidEmiCount, MAX_TENURE_MONTHS, formatManualEmiPaymentsSummary,
-  clampManualEmiDate, getManualEmiDateBounds,
+  clampManualEmiDate, getManualEmiDateBounds, updateEmiMonthStatus,
+  getCurrentEmiMonthIndex, getEmiMonthStatus, getEmiDueDateForMonth,
+  getDisbursements, getMaxDisbursementAmount, getMaxDisbursementEditAmount,
+  getDisbursementProgressPct, previewPartialDisbursement, applyDisbursement,
+  previewDisbursementEdit, updateDisbursement, removeDisbursement,
 } from '../../lib/loanCalculations';
 import {
-  buildLoanAudit, buildLoanDeleteAudit, buildPrepaymentAudit, buildDisburseAudit,
+  buildLoanAudit, buildLoanDeleteAudit, buildPrepaymentAudit,
+  buildPartialDisburseAudit, buildDisbursementUpdateAudit, buildDisbursementDeleteAudit,
 } from '../../lib/auditSummaries';
 import { Card, Btn, InputField, Badge, ProgressBar, StatCard, ConfirmDialog, PageHeader } from '../ui';
 
@@ -391,27 +397,35 @@ function LoanDetailsMetrics({ stats }) {
 }
 
 function LoanClosingTimelineCard({ stats }) {
-  const rows = [
-    {
-      label: 'Original tenure',
-      value: formatDuration(stats.totalEmis),
-      sub: `${stats.totalEmis} monthly EMIs`,
-    },
-    {
-      label: 'Left on standard EMI',
-      value: formatDuration(stats.scheduleTimeRemainingMonths),
-      sub: 'Bank schedule to original end',
-      accent: 'text-indigo-600',
-    },
-    {
-      label: 'Closes in (actual)',
-      value: formatDuration(stats.actualPayoffMonths),
-      sub: stats.monthsSavedVsSchedule > 0
-        ? `${formatDuration(stats.monthsSavedVsSchedule)} sooner`
-        : 'Same as standard EMI schedule',
-      accent: 'text-emerald-600',
-    },
-  ];
+  const closed = stats.isClosed || stats.actualPayoffMonths <= 0;
+  const rows = closed
+    ? [{
+        label: 'Status',
+        value: 'Paid off',
+        sub: `${formatDuration(stats.totalEmis)} original tenure`,
+        accent: 'text-emerald-600',
+      }]
+    : [
+      {
+        label: 'Original tenure',
+        value: formatDuration(stats.totalEmis),
+        sub: `${stats.totalEmis} monthly EMIs`,
+      },
+      {
+        label: 'Left on standard EMI',
+        value: formatDuration(stats.scheduleTimeRemainingMonths),
+        sub: 'Bank schedule to original end',
+        accent: 'text-indigo-600',
+      },
+      {
+        label: 'Closes in (actual)',
+        value: formatDuration(stats.actualPayoffMonths),
+        sub: stats.monthsSavedVsSchedule > 0
+          ? `${formatDuration(stats.monthsSavedVsSchedule)} sooner`
+          : 'Same as standard EMI schedule',
+        accent: 'text-emerald-600',
+      },
+    ];
 
   return (
     <Card className="!p-2.5 sm:!p-4 border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/20">
@@ -421,6 +435,14 @@ function LoanClosingTimelineCard({ stats }) {
         className="!bg-white/70 dark:!bg-slate-900/50 border-indigo-100 dark:border-indigo-900/40"
       />
       <div className="hidden sm:grid sm:grid-cols-3 gap-2 sm:gap-3 text-sm">
+        {closed ? (
+          <div className="sm:col-span-3 p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50 text-center">
+            <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Loan closing</p>
+            <p className="text-sm sm:text-lg font-bold text-emerald-600">Paid off</p>
+            <p className="text-[9px] sm:text-[10px] text-slate-500">{formatDuration(stats.totalEmis)} original tenure</p>
+          </div>
+        ) : (
+          <>
         <div className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50">
           <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Original tenure</p>
           <p className="text-sm sm:text-lg font-bold text-slate-800 dark:text-slate-100 tabular-nums">{formatDuration(stats.totalEmis)}</p>
@@ -440,6 +462,8 @@ function LoanClosingTimelineCard({ stats }) {
               : 'Same as standard EMI schedule'}
           </p>
         </div>
+          </>
+        )}
       </div>
       {stats.prepaymentPrincipalPct > 0 && (
         <p className="text-[10px] sm:text-xs text-teal-700 dark:text-teal-400 mt-2 sm:mt-3 px-0.5 leading-snug">
@@ -619,11 +643,24 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
     const disbursedRaw = toNum(cleaned.disbursedAmount) || toNum(cleaned.loanAmount);
     const disbursed = sanctioned > 0 ? Math.min(disbursedRaw, sanctioned) : disbursedRaw;
     const tenure = Math.min(Math.max(1, toNum(cleaned.tenureMonths) || 60), MAX_TENURE_MONTHS);
+
+    let disbursements = (draft.disbursements || []).filter((d) => toNum(d.amount) > 0 && d.date);
+    if (disbursements.length === 0 && disbursed > 0 && draft.startDate) {
+      disbursements = [{
+        id: genId(),
+        date: draft.startDate,
+        amount: Math.round(disbursed),
+      }];
+    }
+
+    const disbursedTotal = disbursements.reduce((s, d) => s + toNum(d.amount), 0) || disbursed;
+
     return normalizeLoan({
       ...draft,
       ...cleaned,
-      disbursedAmount: disbursed,
-      loanAmount: disbursed,
+      disbursements,
+      disbursedAmount: disbursedTotal,
+      loanAmount: disbursedTotal,
       tenureMonths: tenure,
       manualEmiPayments: collectManualEmiPayments(),
       manualEmi: '',
@@ -731,14 +768,18 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
 
   const footerLabel = isNewLoan ? 'Save Loan' : 'Save Loan';
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg max-h-[92vh] sm:max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-3 sm:p-5 border-b border-slate-200 dark:border-slate-800">
-          <h3 className="font-semibold text-base sm:text-lg">{loan.id && loan.name ? 'Edit Loan' : 'Add Loan'}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="p-3 sm:p-5 space-y-3 sm:space-y-4">
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+        <div
+          className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg max-h-[min(92dvh,100%)] sm:max-h-[90vh] shadow-2xl flex flex-col overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="shrink-0 flex items-center justify-between p-3 sm:p-5 border-b border-slate-200 dark:border-slate-800">
+            <h3 className="font-semibold text-base sm:text-lg">{loan.id && loan.name ? 'Edit Loan' : 'Add Loan'}</h3>
+            <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+          </div>
+          <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 space-y-3 sm:space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <InputField label="Loan Name" value={draft.name} onChange={(v) => set('name', v)} />
             <InputField label="Lender" value={draft.lender} onChange={(v) => set('lender', v)} />
@@ -779,18 +820,36 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
                 }}
                 suffix="₹"
               />
-              <InputField
-                label="Disbursed (Drawn) Amount"
-                type="number"
-                value={draft.disbursedAmount}
-                onChange={(v) => {
-                  const cap = toNum(draft.totalSanctioned);
-                  const next = cap > 0 ? Math.min(toNum(v), cap) : toNum(v);
-                  set('disbursedAmount', v === '' ? '' : next);
-                  set('loanAmount', v === '' ? '' : next);
-                }}
-                suffix="₹"
-              />
+              {(draft.disbursements || []).length > 0 ? (
+                <div className="col-span-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Disbursed so far</p>
+                  <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{formatIndianCurrency(disbursedPreview)}</p>
+                  {sanctionedAmount > 0 && (
+                    <p className="text-xs text-slate-500">
+                      {formatPercent(getDisbursementProgressPct(draft), 1)} of sanctioned ·{' '}
+                      {undisbursedPreview > 0
+                        ? `${formatIndianCurrency(undisbursedPreview)} remaining`
+                        : 'Fully disbursed'}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-slate-500">
+                    Edit individual draws in the loan&apos;s <span className="font-medium">Disbursements</span> tab (use Edit on each row).
+                  </p>
+                </div>
+              ) : (
+                <InputField
+                  label="Initial Disbursed Amount"
+                  type="number"
+                  value={draft.disbursedAmount}
+                  onChange={(v) => {
+                    const cap = toNum(draft.totalSanctioned);
+                    const next = cap > 0 ? Math.min(toNum(v), cap) : toNum(v);
+                    set('disbursedAmount', v === '' ? '' : next);
+                    set('loanAmount', v === '' ? '' : next);
+                  }}
+                  suffix="₹"
+                />
+              )}
               {disbursedExceedsSanctioned && (
                 <div className="col-span-2 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-700 dark:text-red-300">
                   Disbursed amount cannot exceed sanctioned amount ({formatIndianCurrency(sanctionedAmount)}).
@@ -906,10 +965,11 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
               />
             </div>
           )}
-        </div>
-        <div className="flex gap-2 p-5 pt-4 border-t border-slate-200 dark:border-slate-800">
-          <Btn onClick={handleSaveClick} className="flex-1" disabled={saveBlocked}>{footerLabel}</Btn>
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          </div>
+          <div className="shrink-0 flex gap-2 p-3 sm:p-5 pt-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <Btn onClick={handleSaveClick} className="flex-1 min-h-[44px]" disabled={saveBlocked}>{footerLabel}</Btn>
+            <Btn variant="ghost" onClick={onClose} className="min-h-[44px]">Cancel</Btn>
+          </div>
         </div>
       </div>
 
@@ -922,6 +982,270 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
         onConfirm={handleConfirmSave}
         onCancel={() => setShowSaveConfirm(false)}
       />
+    </>,
+    document.body,
+  );
+}
+
+function DisbursementForm({ loan, onConfirm, onCancel, genId }) {
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [notes, setNotes] = useState('');
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const maxAllowed = getMaxDisbursementAmount(loan);
+  const impact = useMemo(() => {
+    const amt = toNum(amount);
+    if (amt <= 0 || !date || maxAllowed <= 0) return null;
+    return previewPartialDisbursement(loan, amt, date);
+  }, [loan, amount, date, maxAllowed]);
+
+  const exceedsLimit = toNum(amount) > maxAllowed && toNum(amount) > 0;
+  const canApply = impact && impact.disbursementAmount > 0;
+
+  const handleApply = () => {
+    if (!canApply) return;
+    if (!showConfirm) { setShowConfirm(true); return; }
+    onConfirm({
+      id: genId(),
+      date,
+      amount: impact.disbursementAmount,
+      notes: notes.trim() || undefined,
+    });
+  };
+
+  const reviewRows = canApply
+    ? [
+        ['Amount', '—', formatIndianCurrency(impact.disbursementAmount)],
+        ['Date', '—', date],
+        ['Total disbursed', fmtStat(impact.before.disbursed), fmtStat(impact.after.disbursed)],
+        ['Outstanding', fmtStat(impact.before.outstanding), fmtStat(impact.after.outstanding)],
+        ['Drawn', '—', `${formatPercent(impact.disbursedPct, 1)} of sanctioned`],
+      ]
+    : [];
+
+  if (maxAllowed <= 0) {
+    return (
+      <div className="border-t border-slate-100 dark:border-slate-800 p-4 bg-slate-50/50 dark:bg-slate-900/20">
+        <p className="text-sm text-slate-500">Loan is fully disbursed (100% of sanctioned amount).</p>
+        <Btn size="sm" variant="ghost" className="mt-3" onClick={onCancel}>Close</Btn>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-slate-100 dark:border-slate-800 p-4 bg-indigo-50/50 dark:bg-indigo-900/10">
+      <p className="text-sm font-semibold text-indigo-800 dark:text-indigo-300 mb-3">Add Disbursement</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        <InputField label="Amount" type="number" value={amount} onChange={setAmount} suffix="₹" />
+        <InputField label="Date" type="date" value={date} onChange={setDate} />
+      </div>
+      <InputField label="Notes (optional)" value={notes} onChange={setNotes} className="mb-3" />
+
+      <p className="text-xs text-slate-500 mb-3">
+        Max you can draw now: <span className="font-semibold text-slate-700 dark:text-slate-300">{formatIndianCurrency(maxAllowed)}</span>
+        {toNum(loan.totalSanctioned) > 0 && (
+          <> · {formatPercent(getDisbursementProgressPct(loan), 1)} already disbursed</>
+        )}
+      </p>
+
+      {exceedsLimit && (
+        <div className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+          Cannot disburse more than remaining sanction ({formatIndianCurrency(maxAllowed)}).
+        </div>
+      )}
+
+      {canApply && (
+        <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 mb-3 space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-slate-600 dark:text-slate-400">Debit on statement</span>
+            <span className="font-bold text-red-600">+ {formatIndianCurrency(impact.disbursementAmount, false)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-600 dark:text-slate-400">New outstanding</span>
+            <span className="font-bold">{formatIndianCurrency(impact.after.outstanding)}</span>
+          </div>
+          {impact.undisbursedAfter > 0 && (
+            <p className="text-xs text-slate-500">Still undisbursed: {formatIndianCurrency(impact.undisbursedAfter)}</p>
+          )}
+        </div>
+      )}
+
+      {showConfirm && canApply && (
+        <div className="mb-4">
+          <ChangeReviewPanel title="Confirm disbursement" rows={reviewRows} />
+        </div>
+      )}
+
+      <div className="flex gap-2 pt-3 border-t border-slate-200/80 dark:border-slate-700/80">
+        {canApply && (
+          <Btn size="sm" onClick={handleApply}>{showConfirm ? 'Confirm disbursement' : 'Review disbursement'}</Btn>
+        )}
+        <Btn size="sm" variant="ghost" onClick={() => { setShowConfirm(false); onCancel(); }}>Cancel</Btn>
+      </div>
+    </div>
+  );
+}
+
+function DisbursementEditModal({ disbursement, loan, onSave, onClose }) {
+  const [amount, setAmount] = useState(disbursement.amount ?? '');
+  const [date, setDate] = useState(disbursement.date || '');
+  const [notes, setNotes] = useState(disbursement.notes || '');
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const impact = useMemo(() => {
+    const amt = toNum(amount);
+    if (amt <= 0 || !date) return null;
+    return previewDisbursementEdit(loan, disbursement.id, amt, date);
+  }, [loan, amount, date, disbursement.id]);
+
+  const maxAllowed = impact?.maxAllowed ?? getMaxDisbursementEditAmount(loan, disbursement.id);
+  const exceedsLimit = toNum(amount) > maxAllowed && toNum(amount) > 0;
+  const canSave = impact && impact.disbursementAmount > 0 && !exceedsLimit;
+
+  const confirmPairs = useMemo(() => [
+    ['Amount', formatIndianCurrency(disbursement.amount, false), formatIndianCurrency(amount, false)],
+    ['Date', disbursement.date, date],
+    ['Notes', disbursement.notes || '—', notes || '—'],
+    ['Total disbursed', fmtStat(impact?.before?.disbursed), fmtStat(impact?.after?.disbursed)],
+    ['Outstanding', fmtStat(impact?.before?.outstanding), fmtStat(impact?.after?.outstanding)],
+  ], [disbursement, amount, date, notes, impact]);
+
+  const handleApply = () => {
+    if (!canSave) return;
+    if (!showConfirm) { setShowConfirm(true); return; }
+    onSave({ amount: impact.disbursementAmount, date, notes: notes.trim() || undefined });
+    onClose();
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md max-h-[min(92dvh,100%)] shadow-2xl flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shrink-0 flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800">
+          <h3 className="font-semibold">Edit draw</h3>
+          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
+          <InputField label="Amount" type="number" value={amount} onChange={setAmount} suffix="₹" />
+          <InputField label="Date" type="date" value={date} onChange={setDate} />
+          <InputField label="Notes" value={notes} onChange={setNotes} />
+          <p className="text-xs text-slate-500">
+            Max for this draw: <span className="font-semibold">{formatIndianCurrency(maxAllowed)}</span>
+            {toNum(loan.totalSanctioned) > 0 && impact && (
+              <> · After save: {formatPercent(impact.disbursedPct, 1)} drawn</>
+            )}
+          </p>
+          {exceedsLimit && (
+            <p className="text-xs text-red-600">Cannot exceed sanctioned limit ({formatIndianCurrency(maxAllowed)} for this draw).</p>
+          )}
+          {showConfirm && (
+            <ChangeReviewPanel title="Confirm draw update" rows={confirmPairs} />
+          )}
+        </div>
+        <div className="shrink-0 flex gap-2 p-4 sm:p-5 pt-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <Btn onClick={handleApply} className="flex-1 min-h-[44px]" disabled={!canSave}>
+            {showConfirm ? 'Save changes' : 'Review changes'}
+          </Btn>
+          <Btn variant="ghost" onClick={() => { setShowConfirm(false); onClose(); }} className="min-h-[44px]">Cancel</Btn>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function DisbursementsPanel({ loan, stats, canEdit, showForm, onAdd, onConfirm, onCancel, onEdit, onDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, genId }) {
+  const disbursements = useMemo(() => getDisbursements(loan), [loan]);
+  const sanctioned = toNum(loan.totalSanctioned);
+  const progressPct = getDisbursementProgressPct(loan);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Disbursements</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {formatIndianCurrency(stats.disbursed)} drawn
+            {sanctioned > 0 && ` · ${formatPercent(progressPct, 1)} of ${formatIndianCurrency(sanctioned)}`}
+            {stats.undisbursed > 0 && ` · ${formatIndianCurrency(stats.undisbursed)} left`}
+          </p>
+        </div>
+        {canEdit && !showForm && (
+          <Btn size="sm" variant="secondary" onClick={onAdd} disabled={stats.undisbursed <= 0}>
+            <Banknote className="w-3 h-3 inline mr-1" />Add Disbursement
+          </Btn>
+        )}
+      </div>
+
+      {canEdit && stats.undisbursed <= 0 && disbursements.length > 0 && (
+        <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+          Fully disbursed — use <span className="font-medium">Edit</span> on a row to correct an amount.
+        </p>
+      )}
+
+      {sanctioned > 0 && (
+        <ProgressBar value={progressPct} color="#6366f1" height="h-2" />
+      )}
+
+      {disbursements.length > 0 ? (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-800/80 text-left text-xs">
+                <th className="px-3 py-2 font-medium text-slate-500">Date</th>
+                <th className="px-3 py-2 font-medium text-slate-500 text-right">Amount</th>
+                <th className="px-3 py-2 font-medium text-slate-500">Notes</th>
+                {canEdit && <th className="px-3 py-2 font-medium text-slate-500 text-right w-24">Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {disbursements.map((d) => (
+                <tr key={d.id || `${d.date}-${d.amount}`} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-3 py-2 whitespace-nowrap">{d.date}</td>
+                  <td className="px-3 py-2 text-right font-medium text-red-600">{formatIndianCurrency(d.amount, false)}</td>
+                  <td className="px-3 py-2 text-slate-500">{d.notes || '—'}</td>
+                  {canEdit && (
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <div className="flex justify-end gap-1">
+                        <Btn variant="ghost" size="sm" className="!px-2" onClick={() => onEdit(d)} title="Edit draw">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Btn>
+                        {disbursements.length > 1 && (
+                          <Btn variant="ghost" size="sm" className="!px-2" onClick={() => onDelete(d)} title="Remove draw">
+                            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                          </Btn>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">No disbursements recorded yet.</p>
+      )}
+
+      {disbursements.map((d) => pendingDisburseDeleteId === d.id && (
+        <ConfirmDialog
+          key={`del-disb-${d.id}`}
+          open
+          message="remove this draw"
+          detail={`${formatIndianCurrency(d.amount, false)} on ${d.date}`}
+          variant="danger"
+          confirmLabel="Remove"
+          onConfirm={() => onConfirmDisburseDelete(d)}
+          onCancel={onCancelDisburseDelete}
+        />
+      ))}
+
+      {showForm && (
+        <DisbursementForm loan={loan} onConfirm={onConfirm} onCancel={onCancel} genId={genId} />
+      )}
     </div>
   );
 }
@@ -1057,14 +1381,17 @@ function PrepaymentEditModal({ prepayment, loan, onSave, onClose }) {
     onClose();
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-800">
+  return createPortal(
+    <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md max-h-[min(92dvh,100%)] shadow-2xl flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shrink-0 flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800">
           <h3 className="font-semibold">Edit prepayment</h3>
           <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
         </div>
-        <div className="p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
           <InputField label="Amount" type="number" value={amount} onChange={setAmount} suffix="₹" />
           <InputField label="Date" type="date" value={date} onChange={setDate} />
           <InputField label="Notes" value={notes} onChange={setNotes} />
@@ -1083,14 +1410,15 @@ function PrepaymentEditModal({ prepayment, loan, onSave, onClose }) {
             </div>
           )}
         </div>
-        <div className="flex gap-2 p-5 pt-4 border-t border-slate-200 dark:border-slate-800">
-          <Btn onClick={handleApply} className="flex-1">
+        <div className="shrink-0 flex gap-2 p-4 sm:p-5 pt-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <Btn onClick={handleApply} className="flex-1 min-h-[44px]">
             {showConfirm ? 'Save changes' : confirmRows.length > 0 ? 'Review changes' : 'Save changes'}
           </Btn>
-          <Btn variant="ghost" onClick={() => { setShowConfirm(false); onClose(); }}>Cancel</Btn>
+          <Btn variant="ghost" onClick={() => { setShowConfirm(false); onClose(); }} className="min-h-[44px]">Cancel</Btn>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1136,22 +1464,12 @@ function PrepaymentsPanel({
           className="mt-2 !bg-white/70 dark:!bg-slate-900/50 border-teal-100 dark:border-teal-900/40"
         />
         <div className="hidden sm:grid sm:grid-cols-4 gap-3 mt-4">
-          <div className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
-            <p className="text-[10px] uppercase text-slate-500">Prepaid</p>
-            <p className="font-bold text-teal-600">{formatIndianCurrency(report.totalPrepaid)}</p>
-          </div>
-          <div className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
-            <p className="text-[10px] uppercase text-slate-500">Interest Saved</p>
-            <p className="font-bold text-emerald-600">{formatIndianCurrency(report.totalSaved, false)}</p>
-          </div>
-          <div className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
-            <p className="text-[10px] uppercase text-slate-500">Closes Early</p>
-            <p className="font-bold text-indigo-600 text-sm">{payoffAccel.value}</p>
-          </div>
-          <div className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
-            <p className="text-[10px] uppercase text-slate-500">Outstanding</p>
-            <p className="font-bold text-red-500">{formatIndianCurrency(stats.outstanding)}</p>
-          </div>
+          {summaryRows.map((row) => (
+            <div key={row.label} className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
+              <p className="text-[10px] uppercase text-slate-500">{row.label}</p>
+              <p className={cn('font-bold text-sm', row.accent)}>{row.value}</p>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -1199,7 +1517,7 @@ function PrepaymentsPanel({
                       {earlyLabel}
                     </td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-right font-bold text-emerald-600 tabular-nums align-top">{formatIndianCurrency(item.interestSaved, false)}</td>
-                    {canEdit && (
+                    {canEdit && p && (
                       <td className="px-1 sm:px-3 py-1.5 sm:py-2.5 align-top">
                         <div className="flex gap-0.5 sm:gap-1 justify-end">
                           <Btn variant="ghost" size="sm" className="!px-1.5 sm:!px-2" onClick={() => onPrepayEdit(p)}><Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" /></Btn>
@@ -1248,16 +1566,151 @@ function PrepaymentsPanel({
   );
 }
 
-const STATEMENT_TAG_STYLES = {
+const STATEMENT_PAGE_SIZES = [25, 50, 100, 200];
+
+const STATEMENT_TXN_STYLES = {
+  disbursement: { label: 'Disbursement', className: 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200' },
+  interest: { label: 'Interest', className: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' },
   emi: { label: 'EMI', className: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300' },
   prepayment: { label: 'Prepayment', className: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' },
 };
 
-const STATEMENT_PAGE_SIZES = [15, 25, 50, 100];
+const STATEMENT_ROW_STYLES = {
+  disbursement: 'border-l-4 border-l-slate-500 bg-slate-100/80 dark:bg-slate-800/50',
+  interest: 'border-l-4 border-l-red-400 bg-red-50/60 dark:bg-red-950/25',
+  emi: 'border-l-4 border-l-indigo-500 bg-indigo-100/90 dark:bg-indigo-900/45',
+  prepayment: 'border-l-4 border-l-teal-500 bg-teal-100/90 dark:bg-teal-900/45',
+};
+
+function formatStatementDateMobile(dateStr) {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return { main: dateStr, year: '' };
+  return {
+    main: d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+    year: String(d.getFullYear()),
+  };
+}
+
+function formatStatementBalance(balance) {
+  return formatIndianCurrency(balance, false);
+}
+
+function UnableToPayEmiPanel({ loan, stats, canEdit, onMarkUnpaid, onClearUnpaid }) {
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const monthIndex = useMemo(() => getCurrentEmiMonthIndex(loan), [loan]);
+
+  if (!canEdit || stats.isClosed || monthIndex == null) return null;
+
+  const emiDate = getEmiDueDateForMonth(loan, monthIndex);
+  const isUnpaid = getEmiMonthStatus(loan, monthIndex) === 'unpaid';
+  const emiLabel = `EMI #${monthIndex + 1} · ${emiDate}`;
+
+  return (
+    <Card className="!p-4 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+      <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">This month&apos;s EMI</p>
+      <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{emiLabel}</p>
+
+      {isUnpaid ? (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-amber-800 dark:text-amber-300">
+            Marked as unpaid — interest will appear on your statement; no EMI credit for this month.
+          </p>
+          <Btn size="sm" variant="secondary" onClick={() => setShowClearConfirm(true)}>
+            I paid this month&apos;s EMI
+          </Btn>
+          <ConfirmDialog
+            open={showClearConfirm}
+            message="Mark this month's EMI as paid?"
+            detail="The statement will show interest debited and EMI credited for this month."
+            confirmLabel="Yes, mark paid"
+            onConfirm={() => {
+              onClearUnpaid(monthIndex);
+              setShowClearConfirm(false);
+            }}
+            onCancel={() => setShowClearConfirm(false)}
+          />
+        </div>
+      ) : (
+        <div className="mt-3">
+          <Btn size="sm" variant="secondary" onClick={() => setShowConfirm(true)}>
+            Unable to pay EMI this month
+          </Btn>
+          <ConfirmDialog
+            open={showConfirm}
+            message="Unable to pay EMI this month?"
+            detail={`Interest for ${emiDate} will still be charged to your loan account, but no EMI payment will be credited.`}
+            confirmLabel="Yes, confirm"
+            onConfirm={() => {
+              onMarkUnpaid(monthIndex);
+              setShowConfirm(false);
+            }}
+            onCancel={() => setShowConfirm(false)}
+          />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function StatementMobileRow({ entry }) {
+  const rowStyle = STATEMENT_ROW_STYLES[entry.txnType] || STATEMENT_ROW_STYLES.interest;
+  const { main, year } = formatStatementDateMobile(entry.date);
+
+  return (
+    <tr className={cn('border-t border-slate-200 dark:border-slate-700', rowStyle)}>
+      <td className="px-2 py-2 whitespace-nowrap align-top">
+        <p className="font-medium tabular-nums">{main}</p>
+        {year && <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{year}</p>}
+      </td>
+      <td className="px-2 py-2 align-top min-w-[9rem]">
+        <p className="font-medium leading-snug">{entry.particulars}</p>
+        {entry.subLabel && <p className="text-xs text-slate-500">{entry.subLabel}</p>}
+      </td>
+      <td className="px-2 py-2 text-right whitespace-nowrap tabular-nums text-red-600 align-top">
+        {entry.debit > 0 ? formatIndianCurrency(entry.debit, false) : '—'}
+      </td>
+      <td className="px-2 py-2 text-right whitespace-nowrap tabular-nums text-emerald-600 align-top">
+        {entry.credit > 0 ? formatIndianCurrency(entry.credit, false) : '—'}
+      </td>
+      <td className="px-2 py-2 text-right whitespace-nowrap tabular-nums font-semibold text-red-600 align-top">
+        {formatStatementBalance(entry.balance)}
+      </td>
+    </tr>
+  );
+}
+
+function StatementDesktopRow({ entry }) {
+  const tagStyle = STATEMENT_TXN_STYLES[entry.txnType] || STATEMENT_TXN_STYLES.interest;
+
+  return (
+    <tr className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+      <td className="px-3 py-2.5 whitespace-nowrap align-top">
+        <p className="font-medium">{entry.date}</p>
+        {entry.subLabel && <p className="text-[10px] text-slate-500">{entry.subLabel}</p>}
+      </td>
+      <td className="px-3 py-2.5 align-top">
+        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase whitespace-nowrap ${tagStyle.className}`}>
+          {tagStyle.label}
+        </span>
+        <p className="text-sm mt-1">{entry.particulars}</p>
+      </td>
+      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums text-red-600 align-top">
+        {entry.debit > 0 ? formatIndianCurrency(entry.debit, false) : '—'}
+      </td>
+      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums text-emerald-600 align-top">
+        {entry.credit > 0 ? formatIndianCurrency(entry.credit, false) : '—'}
+      </td>
+      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums font-semibold text-red-600 align-top">
+        {formatStatementBalance(entry.balance)}
+      </td>
+    </tr>
+  );
+}
 
 function BankStatementPanel({ loan }) {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(25);
   const entries = useMemo(() => buildLoanBankStatement(loan), [loan]);
 
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
@@ -1278,107 +1731,108 @@ function BankStatementPanel({ loan }) {
 
   if (entries.length === 0) {
     return (
-      <Card className="!p-8 text-center border-dashed">
-        <ScrollText className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-        <p className="text-sm text-slate-500">No statement entries yet. Set a start date and disbursed amount.</p>
+      <Card className="!p-6 sm:!p-8 text-center border-dashed">
+        <ScrollText className="w-8 h-8 sm:w-10 sm:h-10 mx-auto text-slate-300 mb-2" />
+        <p className="text-xs sm:text-sm text-slate-500">No statement entries yet. Set a start date and disbursed amount.</p>
       </Card>
     );
   }
 
-  return (
-    <div className="space-y-3 animate-fade-in">
-      <p className="text-xs text-slate-500">
-        Interest debited first, then EMI/prepayment credited. Newest entries first.
-      </p>
+  const latestBalance = entries[0]?.balance;
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-        <table className="w-full text-sm min-w-[720px]">
+  return (
+    <div className="space-y-2.5 sm:space-y-3 animate-fade-in">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[10px] sm:text-xs text-slate-500 leading-snug">
+          Bank-style ledger: negative balance = amount owed. Each EMI date posts interest (debit) then payment (credit). Swipe to see all columns.
+        </p>
+      </div>
+
+      {/* Mobile table — horizontal scroll for full columns */}
+      <div className="sm:hidden overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+        <table className="w-full min-w-[32rem] text-sm">
           <thead>
             <tr className="bg-slate-50 dark:bg-slate-800/80 text-left text-xs">
-              <th className="px-3 py-2.5 font-medium text-slate-500">Date</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500">Type</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Opening</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Int. Debit</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Payment</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Principal</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">+ Extra</th>
-              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Closing</th>
+              <th className="px-2 py-2 font-medium text-slate-500">Date</th>
+              <th className="px-2 py-2 font-medium text-slate-500">Particulars</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Debit</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Credit</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Balance</th>
             </tr>
           </thead>
           <tbody>
-            {pageEntries.map((entry) => {
-              const tagStyle = STATEMENT_TAG_STYLES[entry.tag] || STATEMENT_TAG_STYLES.emi;
-              const interestDebit = entry.transactions.find((t) => t.type === 'debit')?.amount || 0;
-              const paymentCredit = entry.transactions.find((t) => t.type === 'credit')?.amount || 0;
-              return (
-                <tr key={entry.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                  <td className="px-3 py-2.5 whitespace-nowrap">
-                    <p className="font-medium">{entry.date}</p>
-                    {entry.emiMonth > 0 && (
-                      <p className="text-[10px] text-slate-500">EMI #{entry.emiMonth}</p>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase whitespace-nowrap ${tagStyle.className}`}>
-                      {tagStyle.label}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatIndianCurrency(entry.openingBalance)}</td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap text-red-600">
-                    {interestDebit > 0 ? `−${formatIndianCurrency(interestDebit, false)}` : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap text-emerald-600">
-                    {paymentCredit > 0 ? `+${formatIndianCurrency(paymentCredit, false)}` : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    {entry.principal > 0 ? formatIndianCurrency(entry.principal, false) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap text-indigo-600">
-                    {entry.extraPrincipal > 0 ? `+${formatIndianCurrency(entry.extraPrincipal, false)}` : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap font-semibold text-red-600">
-                    {formatIndianCurrency(entry.closingBalance)}
-                  </td>
-                </tr>
-              );
-            })}
+            {pageEntries.map((entry) => (
+              <StatementMobileRow key={entry.id} entry={entry} />
+            ))}
           </tbody>
         </table>
       </div>
 
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-slate-500">
-        <p>
-          Showing <span className="font-medium text-slate-700 dark:text-slate-300">{rangeStart}–{rangeEnd}</span> of{' '}
-          <span className="font-medium text-slate-700 dark:text-slate-300">{entries.length}</span>
+      {/* Desktop table */}
+      <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 dark:bg-slate-800/80 text-left text-xs">
+              <th className="px-3 py-2.5 font-medium text-slate-500">Date</th>
+              <th className="px-3 py-2.5 font-medium text-slate-500">Particulars</th>
+              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Debit</th>
+              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Credit</th>
+              <th className="px-3 py-2.5 font-medium text-slate-500 text-right">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageEntries.map((entry) => (
+              <StatementDesktopRow key={entry.id} entry={entry} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {latestBalance != null && (
+        <p className="text-xs text-slate-500 text-right sm:hidden">
+          Latest balance: <span className="font-semibold text-red-600">{formatStatementBalance(latestBalance)}</span>
         </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2">
-            <span>Rows per page</span>
+      )}
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs text-slate-500">
+        <p className="text-center sm:text-left">
+          <span className="sm:hidden">{rangeStart}–{rangeEnd} of {entries.length}</span>
+          <span className="hidden sm:inline">
+            Showing <span className="font-medium text-slate-700 dark:text-slate-300">{rangeStart}–{rangeEnd}</span> of{' '}
+            <span className="font-medium text-slate-700 dark:text-slate-300">{entries.length}</span>
+          </span>
+        </p>
+        <div className="flex flex-wrap items-center justify-center sm:justify-end gap-2 sm:gap-3">
+          <label className="flex items-center gap-1.5 sm:gap-2">
+            <span className="hidden sm:inline">Rows per page</span>
+            <span className="sm:hidden">Per page</span>
             <select
               value={pageSize}
               onChange={(e) => setPageSize(Number(e.target.value))}
-              className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs"
+              className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs"
             >
               {STATEMENT_PAGE_SIZES.map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
           </label>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 sm:gap-1">
             <Btn
               size="sm"
               variant="ghost"
+              className="!px-2 !text-xs"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={safePage <= 1}
             >
               Prev
             </Btn>
-            <span className="px-2 tabular-nums">
-              {safePage} / {totalPages}
+            <span className="px-1.5 sm:px-2 tabular-nums text-[11px] sm:text-xs">
+              {safePage}/{totalPages}
             </span>
             <Btn
               size="sm"
               variant="ghost"
+              className="!px-2 !text-xs"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={safePage >= totalPages}
             >
@@ -1453,13 +1907,12 @@ function LoanClosingSummary({ stats }) {
   );
 }
 
-function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, onDisburse, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDisburse, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit }) {
+function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid }) {
   const typeInfo = LOAN_TYPES[stats.loanType] || LOAN_TYPES.other;
   const savingsReport = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
-  const isDisbursePending = pendingAction?.type === 'disburse';
   const isDeletePending = pendingAction?.type === 'delete';
+  const disbursementCount = getDisbursements(loan).length;
 
-  const disbursePreview = isDisbursePending ? previewDisbursement(loan) : null;
   const deleteRows = isDeletePending
     ? [
         ['Loan', loan.name, 'Will be removed'],
@@ -1528,6 +1981,20 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, onDisb
             </button>
             <button
               type="button"
+              onClick={() => onDetailTabChange('disbursements')}
+              className={`px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 ${detailTab === 'disbursements' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Banknote className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+              <span className="sm:hidden">Draw</span>
+              <span className="hidden sm:inline">Disbursements</span>
+              {disbursementCount > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+                  {formatPercent(getDisbursementProgressPct(loan), 0)}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
               onClick={() => onDetailTabChange('prepayments')}
               className={`px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 ${detailTab === 'prepayments' ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
             >
@@ -1551,7 +2018,25 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, onDisb
             </button>
           </div>
 
-          {detailTab === 'prepayments' ? (
+          {detailTab === 'disbursements' ? (
+            <div className="p-3 sm:p-5">
+              <DisbursementsPanel
+                loan={loan}
+                stats={stats}
+                canEdit={canEdit}
+                showForm={showDisburse}
+                onAdd={onDisburseAdd}
+                onConfirm={onDisburseConfirm}
+                onCancel={onDisburseCancel}
+                onEdit={onDisburseEdit}
+                onDelete={onDisburseDelete}
+                pendingDisburseDeleteId={pendingDisburseDeleteId}
+                onConfirmDisburseDelete={onConfirmDisburseDelete}
+                onCancelDisburseDelete={onCancelDisburseDelete}
+                genId={genId}
+              />
+            </div>
+          ) : detailTab === 'prepayments' ? (
             <div className="p-3 sm:p-5">
               <PrepaymentsPanel
                 loan={loan}
@@ -1584,41 +2069,23 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, onDisb
 
           <LoanDetailsMetrics stats={stats} />
 
+          <UnableToPayEmiPanel
+            loan={loan}
+            stats={stats}
+            canEdit={canEdit}
+            onMarkUnpaid={(monthIndex) => onMarkEmiUnpaid(loan.id, monthIndex)}
+            onClearUnpaid={(monthIndex) => onClearEmiUnpaid(loan.id, monthIndex)}
+          />
+
           <LoanClosingTimelineCard stats={stats} />
 
           <div>
             <div className="flex justify-between text-sm mb-1.5">
               <span className="text-slate-500">Repayment Progress</span>
-              <span className="font-bold text-emerald-600">{stats.repaymentProgress.toFixed(1)}%</span>
+              <span className="font-bold text-emerald-600">{Number(stats.repaymentProgress ?? 0).toFixed(1)}%</span>
             </div>
             <ProgressBar value={stats.repaymentProgress} color={typeInfo.color} height="h-2.5" />
           </div>
-
-          {canEdit && isDisbursePending && disbursePreview && (
-            <ChangeReviewPanel
-              title="Confirm full disbursement"
-              rows={[
-                ['Disbursed Amount', fmtStat(disbursePreview.before.disbursed), fmtStat(disbursePreview.disbursedAmount)],
-                ['Monthly EMI', fmtStat(disbursePreview.before.emi, false), fmtStat(disbursePreview.after.emi, false)],
-                ['Outstanding', fmtStat(disbursePreview.before.outstanding), fmtStat(disbursePreview.after.outstanding)],
-              ]}
-            />
-          )}
-
-          {canEdit && (
-            <div className={`flex flex-wrap gap-2${isDisbursePending ? ' pt-3 mt-1 border-t border-slate-200/80 dark:border-slate-700/80' : ''}`}>
-              {stats.undisbursed > 0 && (
-                isDisbursePending ? (
-                  <>
-                    <Btn size="sm" variant="secondary" onClick={onConfirmDisburse}><Banknote className="w-3 h-3 inline mr-1" />Confirm Disbursement</Btn>
-                    <Btn size="sm" variant="ghost" onClick={onCancelAction}>Cancel</Btn>
-                  </>
-                ) : (
-                  <Btn size="sm" variant="secondary" onClick={onDisburse}><Banknote className="w-3 h-3 inline mr-1" />Full Disbursement</Btn>
-                )
-              )}
-            </div>
-          )}
 
           {canEdit && isDeletePending && (
             <>
@@ -1713,6 +2180,9 @@ export function LoansTab() {
 
   const [editLoan, setEditLoan] = useState(null);
   const [prepayLoanId, setPrepayLoanId] = useState(null);
+  const [disburseLoanId, setDisburseLoanId] = useState(null);
+  const [editDisbursement, setEditDisbursement] = useState(null);
+  const [pendingDisburseDelete, setPendingDisburseDelete] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
   const [pendingPrepayDelete, setPendingPrepayDelete] = useState(null);
   const [editPrepayment, setEditPrepayment] = useState(null);
@@ -1892,16 +2362,28 @@ export function LoansTab() {
     setPendingPrepayDelete(null);
   };
 
-  const handleConfirmDisburse = (loanId) => {
+  const handleDisburseConfirm = (loanId, disbursement) => {
     const loan = loans.find((l) => l.id === loanId);
-    const amt = toNum(loan?.totalSanctioned) || toNum(loan?.loanAmount);
-    saveLoans(loans.map((l) => {
-      if (l.id !== loanId) return l;
-      const updated = { ...l, disbursedAmount: amt, loanAmount: amt };
-      const fixedEmi = Math.round(calculateEMI(getEmiPrincipal(updated), toNum(updated.interestRate), toNum(updated.tenureMonths)));
-      return { ...updated, emi: fixedEmi };
-    }), buildDisburseAudit(loan, amt));
+    const updatedLoans = loans.map((l) => (l.id === loanId ? applyDisbursement(l, disbursement) : l));
+    saveFinance({ ...pf, loans: updatedLoans }, buildPartialDisburseAudit(loan, disbursement));
+    setDisburseLoanId(null);
     setPendingAction(null);
+  };
+
+  const handleDisburseUpdate = (loanId, disbursementId, updates) => {
+    const loan = loans.find((l) => l.id === loanId);
+    const before = getDisbursements(loan).find((d) => d.id === disbursementId);
+    const updatedLoans = loans.map((l) => (l.id === loanId ? updateDisbursement(l, disbursementId, updates) : l));
+    const after = getDisbursements(updatedLoans.find((l) => l.id === loanId)).find((d) => d.id === disbursementId);
+    saveFinance({ ...pf, loans: updatedLoans }, buildDisbursementUpdateAudit(loan, before, after));
+    setEditDisbursement(null);
+  };
+
+  const handleDisburseDelete = (loanId, disbursement) => {
+    const loan = loans.find((l) => l.id === loanId);
+    const updatedLoans = loans.map((l) => (l.id === loanId ? removeDisbursement(l, disbursement.id) : l));
+    saveFinance({ ...pf, loans: updatedLoans }, buildDisbursementDeleteAudit(loan, disbursement));
+    setPendingDisburseDelete(null);
   };
 
   const handleConfirmDelete = (loanId) => {
@@ -1911,6 +2393,20 @@ export function LoansTab() {
       setLoansUi({ defaultClosingLoanId: null });
     }
     setPendingAction(null);
+  };
+
+  const handleMarkEmiUnpaid = (loanId, monthIndex) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return;
+    const updated = normalizeLoan(updateEmiMonthStatus(loan, monthIndex, 'unpaid'));
+    saveLoans(loans.map((l) => (l.id === loanId ? updated : l)));
+  };
+
+  const handleClearEmiUnpaid = (loanId, monthIndex) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return;
+    const updated = normalizeLoan(updateEmiMonthStatus(loan, monthIndex, 'paid'));
+    saveLoans(loans.map((l) => (l.id === loanId ? updated : l)));
   };
 
   return (
@@ -2037,7 +2533,15 @@ export function LoansTab() {
               onToggle={() => toggleExpanded(loan.id)}
               onEdit={() => setEditLoan(loan)}
               onDelete={() => { setExpandedForLoan(loan.id, true); setPendingAction({ type: 'delete', loanId: loan.id }); }}
-              onDisburse={() => { setExpandedForLoan(loan.id, true); setPendingAction({ type: 'disburse', loanId: loan.id }); }}
+              showDisburse={disburseLoanId === loan.id}
+              onDisburseAdd={() => { setExpandedForLoan(loan.id, true); setDetailTab('disbursements'); setDisburseLoanId(loan.id); setPendingAction(null); }}
+              onDisburseConfirm={(d) => handleDisburseConfirm(loan.id, d)}
+              onDisburseCancel={() => setDisburseLoanId(null)}
+              onDisburseEdit={(d) => setEditDisbursement({ loanId: loan.id, disbursement: d })}
+              onDisburseDelete={(d) => setPendingDisburseDelete({ loanId: loan.id, disbursement: d })}
+              pendingDisburseDeleteId={pendingDisburseDelete?.loanId === loan.id ? pendingDisburseDelete.disbursement.id : null}
+              onConfirmDisburseDelete={() => handleDisburseDelete(pendingDisburseDelete.loanId, pendingDisburseDelete.disbursement)}
+              onCancelDisburseDelete={() => setPendingDisburseDelete(null)}
               onPrepay={() => { setExpandedForLoan(loan.id, true); setDetailTab('prepayments'); setPrepayLoanId(loan.id); setPendingAction(null); }}
               showPrepay={prepayLoanId === loan.id}
               genId={genId}
@@ -2049,12 +2553,13 @@ export function LoansTab() {
               onConfirmPrepayDelete={() => handlePrepayDelete(pendingPrepayDelete.loanId, pendingPrepayDelete.prepayment)}
               onCancelPrepayDelete={() => setPendingPrepayDelete(null)}
               pendingAction={action}
-              onConfirmDisburse={() => handleConfirmDisburse(loan.id)}
               onConfirmDelete={() => handleConfirmDelete(loan.id)}
               onCancelAction={() => setPendingAction(null)}
               detailTab={detailTab}
               onDetailTabChange={setDetailTab}
               canEdit={canEdit}
+              onMarkEmiUnpaid={handleMarkEmiUnpaid}
+              onClearEmiUnpaid={handleClearEmiUnpaid}
             />
           );
         })}
@@ -2070,6 +2575,15 @@ export function LoansTab() {
           loan={loans.find((l) => l.id === editPrepayment.loanId)}
           onSave={(updates) => handlePrepayUpdate(editPrepayment.loanId, editPrepayment.prepayment.id, updates)}
           onClose={() => setEditPrepayment(null)}
+        />
+      )}
+
+      {editDisbursement && (
+        <DisbursementEditModal
+          disbursement={editDisbursement.disbursement}
+          loan={loans.find((l) => l.id === editDisbursement.loanId)}
+          onSave={(updates) => handleDisburseUpdate(editDisbursement.loanId, editDisbursement.disbursement.id, updates)}
+          onClose={() => setEditDisbursement(null)}
         />
       )}
     </div>

@@ -153,7 +153,7 @@ export function InputField({
   );
 }
 
-export function Btn({ children, onClick, variant = 'primary', size = 'md', className, disabled }) {
+export function Btn({ children, onClick, variant = 'primary', size = 'md', className, disabled, type = 'button' }) {
   const variants = {
     primary: 'bg-indigo-600 hover:bg-indigo-700 text-white',
     secondary: 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200',
@@ -162,7 +162,7 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', class
   };
   const sizes = { sm: 'px-3 py-1.5 text-xs rounded-lg', md: 'px-4 py-2 text-sm rounded-xl', lg: 'px-6 py-3 text-base rounded-xl' };
   return (
-    <button onClick={onClick} disabled={disabled} className={cn('font-medium disabled:opacity-50', variants[variant], sizes[size], className)}>
+    <button type={type} onClick={onClick} disabled={disabled} className={cn('font-medium disabled:opacity-50', variants[variant], sizes[size], className)}>
       {children}
     </button>
   );
