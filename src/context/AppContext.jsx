@@ -12,7 +12,7 @@ export function AppProvider({ children }) {
   const { canEdit: authCanEdit, isOwner, session } = useAuth();
   const householdId = session?.household?.id;
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
   const [uiState, setUiState] = useState(() => loadUiState());
 
   const activeTab = uiState.activeTab;
@@ -32,25 +32,30 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (!session?.token) {
-      setLoading(false);
+      setDataLoading(false);
+      setData(null);
       return;
     }
-    setLoading(true);
+    let cancelled = false;
+    setDataLoading(true);
     fetchAppData().then(async (d) => {
+      if (cancelled) return;
       const loaded = d || createDefaultAppData(session?.user?.name);
       const pf = normalizePersonalFinance(loaded.personalFinance);
       const edit = loaded.canEdit ?? authCanEdit;
       if (!edit && d) {
         setData({ ...loaded, personalFinance: pf });
-        setLoading(false);
+        setDataLoading(false);
         return;
       }
       if (!loaded.personalFinance?.prepaymentExpenseMigrated && pf.prepaymentExpenseMigrated && edit) {
         await savePersonalFinance(pf, { section: 'system', action: 'migrate', summary: 'Migrated prepayment expense' });
       }
+      if (cancelled) return;
       setData({ ...loaded, personalFinance: pf });
-      setLoading(false);
+      setDataLoading(false);
     });
+    return () => { cancelled = true; };
   }, [householdId, session?.token]);
 
   useEffect(() => {
@@ -143,24 +148,28 @@ export function AppProvider({ children }) {
     await saveAppData(imported, { section: 'general', action: 'import', summary: 'Imported JSON data' });
   }, [isOwner]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Loading RetireWise...</p>
-        </div>
-      </div>
-    );
-  }
+  const value = useMemo(() => ({
+    data, setData, updateData, updateFinance, activePlan, updatePlan,
+    addPlan, removePlan, dupPlan, setActivePlanId, toggleTheme, importData,
+    activeTab, setActiveTab, uiState, patchUi, generateId, canEdit,
+  }), [
+    data, updateData, updateFinance, activePlan, updatePlan,
+    addPlan, removePlan, dupPlan, setActivePlanId, toggleTheme, importData,
+    activeTab, setActiveTab, uiState, patchUi, canEdit,
+  ]);
+
+  const showDataLoading = Boolean(session?.token && dataLoading);
 
   return (
-    <AppContext.Provider value={{
-      data, setData, updateData, updateFinance, activePlan, updatePlan,
-      addPlan, removePlan, dupPlan, setActivePlanId, toggleTheme, importData,
-      activeTab, setActiveTab, uiState, patchUi, generateId, canEdit,
-    }}>
-      {children}
+    <AppContext.Provider value={value}>
+      {showDataLoading ? (
+        <div className="min-h-screen flex items-center justify-center bg-slate-950">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-slate-400">Loading RetireWise...</p>
+          </div>
+        </div>
+      ) : children}
     </AppContext.Provider>
   );
 }

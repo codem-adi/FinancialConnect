@@ -49,11 +49,11 @@ function Dashboard() {
 export default function App() {
   return (
     <AuthProvider>
-      <AuthGate>
-        <AppProvider>
+      <AppProvider>
+        <AuthGate>
           <Dashboard />
-        </AppProvider>
-      </AuthGate>
+        </AuthGate>
+      </AppProvider>
     </AuthProvider>
   );
 }
