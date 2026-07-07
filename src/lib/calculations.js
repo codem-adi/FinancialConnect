@@ -181,8 +181,12 @@ export function calculateRetireWise(plan) {
     swr40: plan.currentCorpus * 0.04 / 12,
   };
 
-  const corpusRatio = plan.currentCorpus / requiredCorpus.recommended;
-  const readinessScore = Math.min(100, Math.round(corpusRatio * 100));
+  const corpusRatio = requiredCorpus.recommended > 0
+    ? plan.currentCorpus / requiredCorpus.recommended
+    : 0;
+  const readinessScore = Number.isFinite(corpusRatio)
+    ? Math.min(100, Math.max(0, Math.round(corpusRatio * 100)))
+    : 0;
   const monteCarlo = runMonteCarloSimulation(plan, 1000);
 
   const fireTargets = {

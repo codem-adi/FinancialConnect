@@ -27,6 +27,7 @@ export const DEFAULT_UI_STATE = {
   loans: {
     expandedIds: [],
     detailTab: 'details',
+    defaultClosingLoanId: null,
   },
   retirewise: {
     draftPlanById: {},

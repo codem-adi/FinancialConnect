@@ -1,5 +1,5 @@
 import { formatIndianCurrency, toNum, formatRate } from './utils';
-import { LOAN_TYPES, normalizeLoan } from './loanCalculations';
+import { LOAN_TYPES, normalizeLoan, formatManualEmiPaymentsSummary } from './loanCalculations';
 import { formatMonthLabel } from './financeStats';
 
 function money(v) {
@@ -36,6 +36,8 @@ export function buildLoanAudit(before, after) {
   pushChange(changes, 'EMI basis', b.emiBasis, a.emiBasis);
   pushChange(changes, 'start date', b.startDate, a.startDate);
   pushChange(changes, 'min due', b.minDue, a.minDue, money);
+  pushChange(changes, 'actual payment', b.manualEmi, a.manualEmi, money);
+  pushChange(changes, 'EMI payments', formatManualEmiPaymentsSummary(b), formatManualEmiPaymentsSummary(a));
   pushChange(changes, 'balance', b.statementBalance ?? b.loanAmount, a.statementBalance ?? a.loanAmount, money);
 
   const detail = changes.join('; ');

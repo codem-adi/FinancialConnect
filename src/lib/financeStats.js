@@ -1,5 +1,5 @@
 import { toNum } from './utils';
-import { computeLoanStats, getPrepayments } from './loanCalculations';
+import { computeLoanStats, getPrepayments, getLoanMonthlyOutflow } from './loanCalculations';
 import { DEFAULT_FREEDOM_SETTINGS } from './goalCalculations';
 import { getTotalActiveAssets, migrateLegacyAssets } from './assetCalculations';
 import { normalizeMemberCards, sumCardBillAmounts } from './cardBillCalculations';
@@ -191,7 +191,7 @@ export function getLoanEmiTotal(pf) {
   return (pf.loans || []).reduce((s, loan) => {
     const stats = computeLoanStats(loan);
     if (stats.isClosed) return s;
-    return s + toNum(stats.emi);
+    return s + getLoanMonthlyOutflow(stats);
   }, 0);
 }
 

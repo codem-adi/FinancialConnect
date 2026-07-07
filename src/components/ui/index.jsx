@@ -70,9 +70,10 @@ export function StatCard({ label, value, sub, color = 'indigo', trend }) {
 }
 
 export function ProgressBar({ value, color = '#6366f1', height = 'h-2' }) {
+  const pct = Number.isFinite(Number(value)) ? Math.min(100, Math.max(0, Number(value))) : 0;
   return (
     <div className={cn('w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden', height)}>
-      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(value, 100)}%`, backgroundColor: color }} />
+      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
     </div>
   );
 }
@@ -180,9 +181,12 @@ export function Badge({ children, color = 'indigo' }) {
 export function ReadinessRing({ score, color }) {
   const ringColors = { green: '#10b981', yellow: '#f59e0b', red: '#ef4444' };
   const c = ringColors[color] || ringColors.red;
+  const safeScore = Number.isFinite(Number(score))
+    ? Math.min(100, Math.max(0, Math.round(Number(score))))
+    : 0;
   const r = 54;
   const circ = 2 * Math.PI * r;
-  const offset = circ - (score / 100) * circ;
+  const offset = circ - (safeScore / 100) * circ;
   return (
     <div className="relative w-36 h-36 mx-auto">
       <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
@@ -190,7 +194,7 @@ export function ReadinessRing({ score, color }) {
         <circle cx="60" cy="60" r={r} fill="none" stroke={c} strokeWidth="8" strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={offset} className="transition-all duration-700" />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-3xl font-bold" style={{ color: c }}>{score}</span>
+        <span className="text-3xl font-bold" style={{ color: c }}>{safeScore}</span>
         <span className="text-xs text-slate-500">/ 100</span>
       </div>
     </div>
