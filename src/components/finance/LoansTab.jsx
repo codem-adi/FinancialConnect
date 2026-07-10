@@ -23,15 +23,14 @@ import {
   previewDisbursementEdit, updateDisbursement, removeDisbursement,
 } from '../../lib/loanCalculations';
 import {
-  validateLoanStatementAgainstBank,
-  STATEMENT_TOLERANCE,
-  UNKNOWN_RATE_CHANGE_NOTE,
-} from '../../lib/loanStatementValidation';
-import {
   buildLoanAudit, buildLoanDeleteAudit, buildPrepaymentAudit,
   buildPartialDisburseAudit, buildDisbursementUpdateAudit, buildDisbursementDeleteAudit,
 } from '../../lib/auditSummaries';
 import { Card, Btn, InputField, Badge, ProgressBar, StatCard, ConfirmDialog, PageHeader } from '../ui';
+
+function loanIdsMatch(a, b) {
+  return a != null && b != null && String(a) === String(b);
+}
 
 function getLoanPrincipalTaken(stats) {
   if (stats.loanCategory === 'revolving') {
@@ -40,7 +39,7 @@ function getLoanPrincipalTaken(stats) {
   return toNum(stats.disbursedPrincipal) || toNum(stats.loanAmount) || 0;
 }
 
-function DashboardStatCard({ label, value, sub, color = 'indigo', onClick, active, footer }) {
+function DashboardStatCard({ label, value, secondaryValue, sub, color = 'indigo', onClick, active, footer }) {
   const colors = {
     indigo: 'from-indigo-500 to-purple-600',
     green: 'from-emerald-500 to-teal-600',
@@ -63,20 +62,45 @@ function DashboardStatCard({ label, value, sub, color = 'indigo', onClick, activ
     >
       <p className="text-[9px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide truncate">{label}</p>
       <p className={cn('text-sm sm:text-2xl font-bold mt-0.5 sm:mt-1 bg-gradient-to-r bg-clip-text text-transparent break-words leading-tight', colors[color])}>{value}</p>
+      {secondaryValue && (
+        <p className="text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 mt-0.5 tabular-nums">{secondaryValue}</p>
+      )}
       {sub && <p className="text-[9px] sm:text-xs text-slate-500 mt-0.5 sm:mt-1 line-clamp-2 sm:line-clamp-3">{sub}</p>}
       {footer}
     </Tag>
   );
 }
 
-function LoanStatCell({ label, value, sub, valueClassName }) {
+function LoanStatCell({ label, value, sub, valueClassName, onClick }) {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className="p-2 sm:p-3 text-center min-w-0">
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={cn(
+        'p-2 sm:p-3 text-center min-w-0',
+        onClick && 'cursor-pointer hover:bg-white/60 dark:hover:bg-slate-800/40 transition-colors',
+      )}
+    >
       <p className="text-[9px] sm:text-[10px] uppercase text-slate-500 truncate">{label}</p>
       <p className={cn('text-xs sm:text-lg font-bold leading-tight mt-0.5 break-words', valueClassName)}>{value}</p>
       {sub && <p className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5 truncate">{sub}</p>}
-    </div>
+    </Tag>
   );
+}
+
+function useIsSmUp() {
+  const [matches, setMatches] = useState(() => (
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)').matches : true
+  ));
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 640px)');
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return matches;
 }
 
 function EmiBreakdownPanel({ items, total }) {
@@ -179,10 +203,10 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
         {items.map((item) => {
           const typeInfo = LOAN_TYPES[item.loanType] || LOAN_TYPES.other;
           const closed = item.isClosed;
-          const isDefault = defaultLoanId === item.id;
+          const isDefault = loanIdsMatch(defaultLoanId, item.id);
           return (
             <div key={item.id} className={cn('px-3 sm:px-4 py-2.5 sm:py-3', isDefault && 'bg-emerald-50/60 dark:bg-emerald-950/20')}>
-              <div className="flex items-start gap-2 sm:gap-3 mb-2">
+              <div className="flex items-start gap-2 sm:gap-3 mb-2 min-w-0">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-medium text-sm truncate">{item.name}</p>
@@ -190,9 +214,9 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
                       {typeInfo.label}
                     </span>
                     {isDefault && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-medium inline-flex items-center gap-0.5">
-                        <Star className="w-3 h-3 fill-current" />
-                        Default
+                      <span className="inline-flex flex-nowrap items-center gap-0.5 whitespace-nowrap shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-medium leading-none">
+                        <Star className="w-3 h-3 fill-current shrink-0" aria-hidden />
+                        <span>Default</span>
                       </span>
                     )}
                     {closed && (
@@ -207,12 +231,12 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
                   <Btn
                     size="sm"
                     variant="ghost"
-                    className="shrink-0 text-[10px] sm:text-xs px-2"
+                    className="shrink-0 !inline-flex !flex-nowrap items-center gap-0.5 !px-1.5 sm:!px-2 text-[10px] sm:text-xs leading-none"
                     onClick={() => setPendingDefault(item)}
                   >
-                    <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 mr-0.5 sm:mr-1" />
-                    <span className="sm:hidden">Default</span>
-                    <span className="hidden sm:inline">Set default</span>
+                    <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden />
+                    <span className="whitespace-nowrap hidden sm:inline">Set default</span>
+                    <span className="whitespace-nowrap sm:hidden">Default</span>
                   </Btn>
                 )}
               </div>
@@ -348,13 +372,22 @@ function ChangeReviewPanel({ title, rows }) {
   );
 }
 
-function MetricBox({ label, value, sub, accent }) {
+function MetricBox({ label, value, sub, accent, onClick, active }) {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/50 min-w-0">
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={cn(
+        'p-2 sm:p-3 rounded-lg sm:rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/50 min-w-0 text-left w-full',
+        onClick && 'cursor-pointer hover:border-teal-300 dark:hover:border-teal-700 hover:bg-teal-50/50 dark:hover:bg-teal-950/20 transition-colors',
+        active && 'border-teal-400 dark:border-teal-600 ring-2 ring-teal-500/20 bg-teal-50/70 dark:bg-teal-950/30',
+      )}
+    >
       <p className="text-[9px] sm:text-[10px] uppercase tracking-wider text-slate-500 font-medium truncate">{label}</p>
       <p className={cn('text-sm sm:text-lg font-bold mt-0.5 leading-tight break-words', accent || 'text-slate-800 dark:text-slate-100')}>{value}</p>
       {sub && <p className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5 line-clamp-2">{sub}</p>}
-    </div>
+    </Tag>
   );
 }
 
@@ -363,22 +396,40 @@ function CompactMetricTable({ rows, className }) {
     <div className={cn('sm:hidden overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30', className)}>
       <table className="w-full text-[11px]">
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.label} className="border-t border-slate-100 dark:border-slate-800 first:border-t-0">
-              <td className="px-2.5 py-1.5 text-slate-500 font-medium align-top w-[44%]">{row.label}</td>
-              <td className={cn('px-2.5 py-1.5 text-right font-semibold tabular-nums align-top', row.accent || 'text-slate-800 dark:text-slate-100')}>
-                <div>{row.value}</div>
-                {row.sub && <div className="text-[10px] font-normal text-slate-500 mt-0.5 leading-snug">{row.sub}</div>}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const clickable = typeof row.onClick === 'function';
+            return (
+              <tr
+                key={row.label}
+                onClick={row.onClick}
+                className={cn(
+                  'border-t border-slate-100 dark:border-slate-800 first:border-t-0',
+                  clickable && 'cursor-pointer active:bg-teal-50/80 dark:active:bg-teal-950/30',
+                  clickable && row.active && 'bg-teal-50/70 dark:bg-teal-950/30',
+                )}
+              >
+                <td className={cn('px-2.5 py-1.5 font-medium align-top w-[44%]', clickable ? 'text-teal-700 dark:text-teal-300' : 'text-slate-500')}>
+                  {row.label}
+                  {clickable && (
+                    <span className="block text-[9px] font-normal text-teal-600/80 dark:text-teal-400/80 mt-0.5">
+                      {row.active ? 'Hide' : 'Timeline'}
+                    </span>
+                  )}
+                </td>
+                <td className={cn('px-2.5 py-1.5 text-right font-semibold tabular-nums align-top', row.accent || 'text-slate-800 dark:text-slate-100')}>
+                  <div>{row.value}</div>
+                  {row.sub && <div className="text-[10px] font-normal text-slate-500 mt-0.5 leading-snug">{row.sub}</div>}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-function LoanDetailsMetrics({ stats }) {
+function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosingTimeline }) {
   const rows = [
     { label: 'EMI Principal', value: formatIndianCurrency(stats.emiPrincipal), sub: stats.emiBasis === 'sanctioned' ? 'Sanctioned basis' : 'Disbursed basis' },
     { label: 'Disbursed', value: formatIndianCurrency(stats.disbursed) },
@@ -386,103 +437,100 @@ function LoanDetailsMetrics({ stats }) {
     { label: 'Principal Paid', value: formatIndianCurrency(stats.principalPaid), accent: 'text-emerald-600' },
     { label: 'Interest Paid', value: formatIndianCurrency(stats.interestPaid), accent: 'text-amber-600' },
     { label: 'Remaining Interest', value: formatIndianCurrency(stats.remainingInterest || 0), accent: 'text-orange-500' },
-    { label: 'Prepayments', value: formatIndianCurrency(stats.prepaymentTotal), sub: `${stats.prepaymentCount} payment(s)`, accent: 'text-teal-600' },
-    { label: 'Undisbursed', value: formatIndianCurrency(stats.undisbursed), accent: 'text-amber-500' },
+    {
+      label: 'Prepayments',
+      value: formatIndianCurrency(stats.prepaymentTotal),
+      sub: `${stats.prepaymentCount} payment(s)`,
+      accent: 'text-teal-600',
+      onClick: onToggleClosingTimeline,
+      active: showClosingTimeline,
+    },
+    ...(toNum(stats.undisbursed) > 0
+      ? [{ label: 'Undisbursed', value: formatIndianCurrency(stats.undisbursed), accent: 'text-amber-500' }]
+      : []),
   ];
 
   return (
-    <>
+    <div className="space-y-2">
       <CompactMetricTable rows={rows} />
       <div className="hidden sm:grid sm:grid-cols-4 gap-2 sm:gap-3">
         {rows.map((row) => (
-          <MetricBox key={row.label} label={row.label} value={row.value} sub={row.sub} accent={row.accent} />
+          <MetricBox
+            key={row.label}
+            label={row.label}
+            value={row.value}
+            sub={row.sub}
+            accent={row.accent}
+            onClick={row.onClick}
+            active={row.active}
+          />
         ))}
       </div>
-    </>
+      {showClosingTimeline && (
+        <div className="sm:max-w-sm sm:ml-auto animate-fade-in">
+          <LoanClosingTimelineCard stats={stats} />
+        </div>
+      )}
+    </div>
   );
 }
 
 function LoanClosingTimelineCard({ stats }) {
   const closed = stats.isClosed;
-  const rows = closed
-    ? [{
-        label: 'Status',
-        value: 'Paid off',
-        sub: `${formatDuration(stats.totalEmis)} original tenure`,
-        accent: 'text-emerald-600',
-      }]
-    : [
-      {
-        label: 'Original tenure',
-        value: formatDuration(stats.totalEmis),
-        sub: `${stats.totalEmis} monthly EMIs`,
-      },
-      {
-        label: 'Left on standard EMI',
-        value: formatDuration(stats.scheduleTimeRemainingMonths),
-        sub: 'Bank schedule to original end',
-        accent: 'text-indigo-600',
-      },
-      {
-        label: 'Closes in (actual)',
-        value: formatDuration(stats.actualPayoffMonths),
-        sub: stats.monthsSavedVsSchedule > 0
-          ? `${formatDuration(stats.monthsSavedVsSchedule)} sooner`
-          : 'Same as standard EMI schedule',
-        accent: 'text-emerald-600',
-      },
-    ];
+  const hasAccel = !closed && stats.monthsSavedVsSchedule > 0;
+  const scheduleLeft = Math.max(0, stats.scheduleTimeRemainingMonths || 0);
+  const actualLeft = Math.max(0, stats.actualPayoffMonths || 0);
+  const progressPct = scheduleLeft > 0
+    ? Math.min(100, Math.max(8, ((scheduleLeft - actualLeft) / scheduleLeft) * 100))
+    : 0;
+
+  if (closed) {
+    return (
+      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-emerald-200/80 dark:border-emerald-800/60 bg-emerald-50/60 dark:bg-emerald-950/20 animate-fade-in">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <p className="text-[11px] sm:text-xs text-emerald-700 dark:text-emerald-300">
+          Paid off · original {formatDuration(stats.totalEmis)}
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <Card className="!p-2.5 sm:!p-4 border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/20">
-      <p className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1.5 sm:mb-3 px-0.5">Loan closing timeline</p>
-      <CompactMetricTable
-        rows={rows}
-        className="!bg-white/70 dark:!bg-slate-900/50 border-indigo-100 dark:border-indigo-900/40"
-      />
-      <div className="hidden sm:grid sm:grid-cols-3 gap-2 sm:gap-3 text-sm">
-        {closed ? (
-          <div className="sm:col-span-3 p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50 text-center">
-            <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Loan closing</p>
-            <p className="text-sm sm:text-lg font-bold text-emerald-600">Paid off</p>
-            <p className="text-[9px] sm:text-[10px] text-slate-500">{formatDuration(stats.totalEmis)} original tenure</p>
-          </div>
-        ) : (
-          <>
-        <div className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50">
-          <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Original tenure</p>
-          <p className="text-sm sm:text-lg font-bold text-slate-800 dark:text-slate-100 tabular-nums">{formatDuration(stats.totalEmis)}</p>
-          <p className="text-[9px] sm:text-[10px] text-slate-500">{stats.totalEmis} monthly EMIs</p>
-        </div>
-        <div className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50">
-          <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Left on standard EMI</p>
-          <p className="text-sm sm:text-lg font-bold text-indigo-600 tabular-nums">{formatDuration(stats.scheduleTimeRemainingMonths)}</p>
-          <p className="text-[9px] sm:text-[10px] text-slate-500">Bank schedule to original end</p>
-        </div>
-        <div className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-white/70 dark:bg-slate-900/50">
-          <p className="text-[9px] sm:text-[10px] uppercase text-slate-500">Closes in (actual)</p>
-          <p className="text-sm sm:text-lg font-bold text-emerald-600 tabular-nums">{formatDuration(stats.actualPayoffMonths)}</p>
-          <p className="text-[9px] sm:text-[10px] text-slate-500">
-            {stats.monthsSavedVsSchedule > 0
-              ? `${formatDuration(stats.monthsSavedVsSchedule)} sooner · prepay + lower balance`
-              : 'Same as standard EMI schedule'}
+    <div className="rounded-lg border border-teal-200/70 dark:border-teal-800/50 bg-gradient-to-r from-teal-50/50 via-white to-indigo-50/40 dark:from-teal-950/20 dark:via-slate-900/40 dark:to-indigo-950/20 px-2.5 py-2 animate-fade-in">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">Closes in</p>
+          <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
+            {formatDuration(actualLeft)}
           </p>
         </div>
-          </>
+        <div className="text-right min-w-0">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">Std EMI</p>
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums leading-tight">
+            {formatDuration(scheduleLeft)}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-1.5 h-1 rounded-full bg-slate-200/80 dark:bg-slate-700/80 overflow-hidden relative">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-400 to-teal-500"
+          style={{ width: `${hasAccel ? Math.max(12, 100 - progressPct) : 100}%` }}
+        />
+        {hasAccel && (
+          <div
+            className="absolute inset-y-0 right-0 rounded-full bg-indigo-300/50 dark:bg-indigo-500/30"
+            style={{ width: `${progressPct}%` }}
+          />
         )}
       </div>
-      {stats.prepaymentPrincipalPct > 0 && (
-        <p className="text-[10px] sm:text-xs text-teal-700 dark:text-teal-400 mt-2 sm:mt-3 px-0.5 leading-snug">
-          Prepayments: {formatIndianCurrency(stats.prepaymentTotal)} ({formatPercent(stats.prepaymentPrincipalPct, 1)} of loan drawn)
-          {stats.monthsSavedVsSchedule > 0 && (
-            <span className="hidden sm:inline">{` — closes ${formatDuration(stats.monthsSavedVsSchedule)} earlier than standard EMI schedule`}</span>
-          )}
-          {stats.monthsSavedVsSchedule > 0 && (
-            <span className="sm:hidden">{` · ${formatDuration(stats.monthsSavedVsSchedule)} earlier`}</span>
-          )}
-        </p>
-      )}
-    </Card>
+
+      <p className="mt-1 text-[10px] text-slate-500 leading-snug">
+        {hasAccel
+          ? `${formatDuration(stats.monthsSavedVsSchedule)} earlier than bank schedule`
+          : 'On track with standard EMI'}
+      </p>
+    </div>
   );
 }
 
@@ -690,12 +738,7 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
           hasManualEmi: true,
         };
       }
-      return computeMonthlyPaymentBreakdown(
-        saved,
-        stats.outstanding > 0 ? stats.outstanding : getDisbursedPrincipal(saved),
-        previewEmi,
-        saved.interestRate,
-      );
+      return computeMonthlyPaymentBreakdown(saved, stats.outstanding, previewEmi, saved.interestRate);
     } catch {
       return null;
     }
@@ -874,9 +917,6 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
                 </div>
               )}
               <InputField label="Interest Rate" type="number" value={draft.interestRate} onChange={(v) => set('interestRate', v)} suffix="% p.a." step={0.01} showWords={false} emptyZero={false} />
-              <p className="col-span-2 text-[10px] text-slate-500 leading-relaxed">
-                Enter your current rate (e.g. 7.45%) from loan start. Unknown rate-change dates are not guessed.
-              </p>
               <InputField
                 label="Tenure"
                 type="number"
@@ -1460,118 +1500,132 @@ function PrepaymentsPanel({
   loan, stats, canEdit, showPrepay, onPrepay, onPrepayConfirm, onPrepayCancel, genId,
   onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete,
 }) {
+  const [visibleCount, setVisibleCount] = useState(PREPAYMENTS_PAGE_SIZE);
   const report = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
   const prepayments = getPrepayments(loan);
+  const hasPrepays = prepayments.length > 0;
   const payoffAccel = formatPayoffAcceleration(report.monthsSaved ?? 0);
 
-  const summaryRows = [
-    { label: 'Prepaid', value: formatIndianCurrency(report.totalPrepaid), accent: 'text-teal-600' },
-    { label: 'Interest Saved', value: formatIndianCurrency(report.totalSaved, false), accent: 'text-emerald-600' },
-    { label: 'Closes Early', value: payoffAccel.value, accent: 'text-indigo-600' },
-    { label: 'Outstanding', value: formatIndianCurrency(stats.outstanding), accent: 'text-red-500' },
-  ];
+  const sortedItems = useMemo(
+    () => [...report.items].sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [report.items],
+  );
+
+  useEffect(() => {
+    setVisibleCount(PREPAYMENTS_PAGE_SIZE);
+  }, [loan.id, sortedItems.length]);
+
+  const visibleItems = sortedItems.slice(0, visibleCount);
+  const hasMore = visibleCount < sortedItems.length;
+  const remaining = sortedItems.length - visibleCount;
 
   return (
-    <div className="space-y-3 sm:space-y-4 animate-fade-in">
-      <Card className="!p-2.5 sm:!p-4 border-teal-200 dark:border-teal-800 bg-gradient-to-br from-teal-50/80 to-emerald-50/50 dark:from-teal-950/30 dark:to-emerald-950/20">
-        <div className="flex flex-wrap items-start justify-between gap-2 sm:gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-0.5 sm:mb-1">
-              <ArrowDownCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-teal-600 shrink-0" />
-              <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Prepayments</p>
-            </div>
-            <p className="hidden sm:block text-xs text-slate-500 max-w-md">
-              Extra principal payments reduce your outstanding balance. EMI stays fixed — you close the loan sooner.
-            </p>
-          </div>
-          {canEdit && !stats.isClosed && (
-            <Btn size="sm" variant="secondary" className="shrink-0 text-xs" onClick={onPrepay}>
-              <Plus className="w-3 h-3 inline mr-1" />
-              <span className="hidden sm:inline">Record Prepayment</span>
-              <span className="sm:hidden">Record</span>
-            </Btn>
-          )}
+    <div className="space-y-3 animate-fade-in">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Prepayments</p>
+          <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">
+            {hasPrepays
+              ? `${prepayments.length} recorded · EMI stays fixed, loan closes sooner`
+              : 'Pay extra principal anytime to cut interest and close earlier'}
+          </p>
         </div>
+        {canEdit && !stats.isClosed && !showPrepay && (
+          <Btn size="sm" variant="secondary" className="shrink-0 !text-xs whitespace-nowrap" onClick={onPrepay}>
+            <Plus className="w-3 h-3 inline mr-1" />
+            Record
+          </Btn>
+        )}
+      </div>
 
-        <CompactMetricTable
-          rows={summaryRows}
-          className="mt-2 !bg-white/70 dark:!bg-slate-900/50 border-teal-100 dark:border-teal-900/40"
-        />
-        <div className="hidden sm:grid sm:grid-cols-4 gap-3 mt-4">
-          {summaryRows.map((row) => (
-            <div key={row.label} className="text-center p-2 rounded-lg bg-white/70 dark:bg-slate-900/50">
-              <p className="text-[10px] uppercase text-slate-500">{row.label}</p>
-              <p className={cn('font-bold text-sm', row.accent)}>{row.value}</p>
-            </div>
-          ))}
+      {hasPrepays && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] sm:text-xs px-0.5">
+          <span className="tabular-nums">
+            <span className="text-slate-500">Prepaid </span>
+            <span className="font-semibold text-teal-600">{formatIndianCurrency(report.totalPrepaid, false)}</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-slate-500">Saved </span>
+            <span className="font-semibold text-emerald-600">{formatIndianCurrency(report.totalSaved, false)}</span>
+          </span>
+          {report.monthsSaved > 0 && (
+            <span className="tabular-nums">
+              <span className="text-slate-500">Earlier </span>
+              <span className="font-semibold text-indigo-600">{payoffAccel.value}</span>
+            </span>
+          )}
+          <span className="tabular-nums">
+            <span className="text-slate-500">Left </span>
+            <span className="font-semibold text-red-500">{formatIndianCurrency(stats.outstanding, false)}</span>
+          </span>
         </div>
-      </Card>
+      )}
 
       {showPrepay && (
         <PrepaymentForm loan={loan} genId={genId} onConfirm={onPrepayConfirm} onCancel={onPrepayCancel} />
       )}
 
-      {prepayments.length === 0 ? (
-        <Card className="!p-6 sm:!p-8 text-center border-dashed">
-          <ArrowDownCircle className="w-8 h-8 sm:w-10 sm:h-10 mx-auto text-slate-300 mb-2" />
-          <p className="text-xs sm:text-sm text-slate-500">No prepayments recorded yet</p>
-          {canEdit && !stats.isClosed && !showPrepay && (
-            <Btn size="sm" variant="secondary" className="mt-3" onClick={onPrepay}>Record your first prepayment</Btn>
+      {!hasPrepays && !showPrepay && (
+        <p className="text-xs text-slate-500 py-1">
+          No prepayments yet.
+          {canEdit && !stats.isClosed && (
+            <>
+              {' '}
+              <button type="button" onClick={onPrepay} className="text-teal-600 dark:text-teal-400 font-medium hover:underline">
+                Record one
+              </button>
+            </>
           )}
-        </Card>
-      ) : (
-        <div className="overflow-hidden rounded-lg sm:rounded-xl border border-slate-200 dark:border-slate-700">
-          <table className="w-full text-[11px] sm:text-sm">
-            <thead>
-              <tr className="bg-slate-50 dark:bg-slate-800/80 text-left">
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium text-slate-500">Date</th>
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium text-slate-500 text-right">Amount</th>
-                <th className="hidden sm:table-cell px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium text-slate-500">Closes Early</th>
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium text-slate-500 text-right">Saved</th>
-                {canEdit && <th className="px-1 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-medium text-slate-500 w-14 sm:w-20" />}
-              </tr>
-            </thead>
-            <tbody>
-              {report.items.map((item) => {
-                const p = prepayments.find((x) => x.id === item.id);
-                const earlyLabel = item.monthsSavedEarly > 0 ? formatPayoffAcceleration(item.monthsSavedEarly).value : '—';
-                return (
-                  <tr key={item.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 align-top">
-                      <p className="font-medium">{item.date}</p>
-                      <p className="text-[10px] text-slate-500 leading-snug">
-                        EMI #{item.emiMonth}
-                        {item.monthsSavedEarly > 0 && (
-                          <span className="sm:hidden text-emerald-600"> · {earlyLabel}</span>
-                        )}
-                      </p>
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-right font-medium tabular-nums align-top">{formatIndianCurrency(item.amount, false)}</td>
-                    <td className="hidden sm:table-cell px-2 sm:px-3 py-1.5 sm:py-2.5 text-emerald-600 font-medium align-top">
-                      {earlyLabel}
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-right font-bold text-emerald-600 tabular-nums align-top">{formatIndianCurrency(item.interestSaved, false)}</td>
-                    {canEdit && p && (
-                      <td className="px-1 sm:px-3 py-1.5 sm:py-2.5 align-top">
-                        <div className="flex gap-0.5 sm:gap-1 justify-end">
-                          <Btn variant="ghost" size="sm" className="!px-1.5 sm:!px-2" onClick={() => onPrepayEdit(p)}><Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" /></Btn>
-                          <Btn variant="ghost" size="sm" className="!px-1.5 sm:!px-2 !text-red-500" onClick={() => onPrepayDelete(p)}><Trash2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" /></Btn>
-                        </div>
-                      </td>
+        </p>
+      )}
+
+      {hasPrepays && (
+        <div className="divide-y divide-slate-100 dark:divide-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+          {visibleItems.map((item) => {
+            const p = prepayments.find((x) => x.id === item.id);
+            const earlyLabel = item.monthsSavedEarly > 0 ? formatPayoffAcceleration(item.monthsSavedEarly).value : null;
+            return (
+              <div key={item.id} className="flex items-start gap-2 px-2.5 sm:px-3 py-2 sm:py-2.5 bg-white dark:bg-slate-900">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-xs sm:text-sm font-semibold tabular-nums text-teal-700 dark:text-teal-300">
+                      {formatIndianCurrency(item.amount, false)}
+                    </p>
+                    <p className="text-[10px] sm:text-xs text-slate-500 tabular-nums shrink-0">{item.date}</p>
+                  </div>
+                  <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">
+                    EMI #{item.emiMonth}
+                    {earlyLabel && <span className="text-emerald-600"> · {earlyLabel} early</span>}
+                    {item.interestSaved > 0 && (
+                      <span className="text-emerald-600"> · saved {formatIndianCurrency(item.interestSaved, false)}</span>
                     )}
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/20">
-                <td colSpan={2} className="px-2 sm:px-3 py-1.5 sm:py-2.5 font-semibold text-[11px] sm:text-sm sm:hidden">Total saved</td>
-                <td colSpan={3} className="hidden sm:table-cell px-2 sm:px-3 py-1.5 sm:py-2.5 font-semibold text-sm">Total saved</td>
-                <td className="px-2 sm:px-3 py-1.5 sm:py-2.5 text-right font-bold text-emerald-600 tabular-nums">{formatIndianCurrency(report.totalSaved, false)}</td>
-                {canEdit && <td />}
-              </tr>
-            </tfoot>
-          </table>
+                  </p>
+                </div>
+                {canEdit && p && (
+                  <div className="flex gap-0.5 shrink-0 -mr-1">
+                    <Btn variant="ghost" size="sm" className="!px-1.5" onClick={() => onPrepayEdit(p)} title="Edit">
+                      <Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                    </Btn>
+                    <Btn variant="ghost" size="sm" className="!px-1.5 !text-red-500" onClick={() => onPrepayDelete(p)} title="Delete">
+                      <Trash2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                    </Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {hasMore && (
+            <div className="px-3 py-2 text-center bg-slate-50/80 dark:bg-slate-800/40">
+              <Btn
+                size="sm"
+                variant="ghost"
+                className="!text-xs"
+                onClick={() => setVisibleCount((n) => Math.min(n + PREPAYMENTS_PAGE_SIZE, sortedItems.length))}
+              >
+                Load more ({remaining} remaining)
+              </Btn>
+            </div>
+          )}
         </div>
       )}
 
@@ -1587,20 +1641,12 @@ function PrepaymentsPanel({
           onCancel={onCancelPrepayDelete}
         />
       ))}
-
-      {report.monthsSaved > 0 && (
-        <p className="text-xs text-slate-500 leading-relaxed">
-          Your prepayments move loan closure ~{formatDuration(report.monthsSaved)} ahead
-          {report.monthsToPayoffWithoutPrepay > report.monthsToPayoff && (
-            <> ({formatDuration(report.monthsToPayoffWithoutPrepay)} → {formatDuration(report.monthsToPayoff)} remaining)</>
-          )}
-        </p>
-      )}
     </div>
   );
 }
 
 const STATEMENT_PAGE_SIZES = [25, 50, 100, 200];
+const PREPAYMENTS_PAGE_SIZE = 10;
 
 const STATEMENT_TXN_STYLES = {
   disbursement: { label: 'Disbursement', className: 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200' },
@@ -1629,61 +1675,68 @@ function formatStatementBalance(balance) {
   return formatIndianCurrency(balance, false);
 }
 
-function UnableToPayEmiPanel({ loan, stats, canEdit, onMarkUnpaid, onClearUnpaid }) {
+function SkipEmiAction({ loan, stats, canEdit, onMarkUnpaid, onClearUnpaid }) {
   const [showConfirm, setShowConfirm] = useState(false);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const monthIndex = useMemo(() => getCurrentEmiMonthIndex(loan), [loan]);
 
   if (!canEdit || stats.isClosed || monthIndex == null) return null;
 
   const emiDate = getEmiDueDateForMonth(loan, monthIndex);
   const isUnpaid = getEmiMonthStatus(loan, monthIndex) === 'unpaid';
-  const emiLabel = `EMI #${monthIndex + 1} · ${emiDate}`;
+  const emiLabel = `EMI #${monthIndex + 1}`;
+  const emiAmount = formatIndianCurrency(stats.monthlyPayment || stats.emi || 0, false);
+
+  if (isUnpaid) {
+    return (
+      <>
+        <Btn
+          size="sm"
+          variant="secondary"
+          className="shrink-0 whitespace-nowrap !text-amber-800 dark:!text-amber-200"
+          onClick={() => setShowConfirm(true)}
+        >
+          Undo skip
+        </Btn>
+        <ConfirmDialog
+          open={showConfirm}
+          title="Undo skipped EMI"
+          message={`undo the skip for ${emiLabel} (${emiDate})`}
+          detail={`This marks ${emiLabel} as paid again.\n\n• Interest will be charged for the period\n• EMI of ${emiAmount} will be credited to your loan\n• Same as a normal payment month`}
+          confirmLabel="Yes, mark as paid"
+          onConfirm={() => {
+            onClearUnpaid(monthIndex);
+            setShowConfirm(false);
+          }}
+          onCancel={() => setShowConfirm(false)}
+        />
+      </>
+    );
+  }
 
   return (
-    <Card className="!p-4 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
-      <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">This month&apos;s EMI</p>
-      <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{emiLabel}</p>
-
-      {isUnpaid ? (
-        <div className="mt-3 space-y-2">
-          <p className="text-xs text-amber-800 dark:text-amber-300">
-            Marked as unpaid — interest will appear on your statement; no EMI credit for this month.
-          </p>
-          <Btn size="sm" variant="secondary" onClick={() => setShowClearConfirm(true)}>
-            I paid this month&apos;s EMI
-          </Btn>
-          <ConfirmDialog
-            open={showClearConfirm}
-            message="Mark this month's EMI as paid?"
-            detail="The statement will show interest debited and EMI credited for this month."
-            confirmLabel="Yes, mark paid"
-            onConfirm={() => {
-              onClearUnpaid(monthIndex);
-              setShowClearConfirm(false);
-            }}
-            onCancel={() => setShowClearConfirm(false)}
-          />
-        </div>
-      ) : (
-        <div className="mt-3">
-          <Btn size="sm" variant="secondary" onClick={() => setShowConfirm(true)}>
-            Unable to pay EMI this month
-          </Btn>
-          <ConfirmDialog
-            open={showConfirm}
-            message="Unable to pay EMI this month?"
-            detail={`Interest for ${emiDate} will still be charged to your loan account, but no EMI payment will be credited.`}
-            confirmLabel="Yes, confirm"
-            onConfirm={() => {
-              onMarkUnpaid(monthIndex);
-              setShowConfirm(false);
-            }}
-            onCancel={() => setShowConfirm(false)}
-          />
-        </div>
-      )}
-    </Card>
+    <>
+      <Btn
+        size="sm"
+        variant="secondary"
+        className="shrink-0 whitespace-nowrap"
+        onClick={() => setShowConfirm(true)}
+      >
+        Skip this EMI
+      </Btn>
+      <ConfirmDialog
+        open={showConfirm}
+        title="Skip this EMI"
+        message={`skip ${emiLabel} due on ${emiDate}`}
+        detail={`You are choosing not to pay this month's installment (${emiAmount}).\n\nWhat happens:\n• Interest for the period is still added to outstanding\n• No EMI payment is credited this month\n• The loan will take longer to close\n\nYou can undo this later if you paid.`}
+        confirmLabel="Yes, skip this EMI"
+        variant="danger"
+        onConfirm={() => {
+          onMarkUnpaid(monthIndex);
+          setShowConfirm(false);
+        }}
+        onCancel={() => setShowConfirm(false)}
+      />
+    </>
   );
 }
 
@@ -1742,196 +1795,10 @@ function StatementDesktopRow({ entry }) {
   );
 }
 
-function StatementReconciliationPanel({ loan, computedCycles, canEdit, onSaveReference }) {
-  const validation = useMemo(() => validateLoanStatementAgainstBank(loan), [loan, computedCycles]);
-  const [draftCycles, setDraftCycles] = useState(() => (
-    validation.computedCycles.map((c) => {
-      const ref = validation.results.find((r) => r.monthIndex === c.monthIndex);
-      const bank = loan.bankReference?.cycles?.find((b) => toNum(b.monthIndex) === c.monthIndex);
-      return {
-        monthIndex: c.monthIndex,
-        interest: bank?.interest != null ? String(bank.interest) : '',
-        emi: bank?.emi != null ? String(bank.emi) : '',
-      };
-    })
-  ));
-  const [expandedDiag, setExpandedDiag] = useState(null);
-
-  useEffect(() => {
-    setDraftCycles(validation.computedCycles.map((c) => {
-      const bank = loan.bankReference?.cycles?.find((b) => toNum(b.monthIndex) === c.monthIndex);
-      return {
-        monthIndex: c.monthIndex,
-        interest: bank?.interest != null ? String(bank.interest) : '',
-        emi: bank?.emi != null ? String(bank.emi) : '',
-      };
-    }));
-  }, [loan.id, loan.bankReference, validation.computedCycles.length]);
-
-  const handleSave = () => {
-    const cycles = draftCycles
-      .filter((d) => d.interest !== '' && toNum(d.interest) >= 0)
-      .map((d) => ({
-        monthIndex: d.monthIndex,
-        interest: Math.round(toNum(d.interest)),
-        emi: d.emi !== '' ? Math.round(toNum(d.emi)) : null,
-      }));
-    onSaveReference(cycles.length > 0 ? { cycles } : null);
-  };
-
-  if (computedCycles.length === 0) return null;
-
-  return (
-    <Card className="!p-3 sm:!p-4 space-y-3 border-amber-200/80 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-950/20">
-      <div>
-        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">BOB statement reconciliation</p>
-        <p className="text-[10px] sm:text-xs text-slate-500 mt-1 leading-relaxed">
-          Daily reducing balance (actual/365). Uses <span className="font-medium">{formatRate(loan.interestRate)}</span> from loan start
-          — no rate-change date is assumed unless you add a verified one. {validation.methodology.rateNote && (
-            <span className="block mt-1 text-amber-800/90 dark:text-amber-200/90">{UNKNOWN_RATE_CHANGE_NOTE}</span>
-          )}
-        </p>
-      </div>
-
-      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-        <table className="w-full min-w-[36rem] text-xs sm:text-sm">
-          <thead>
-            <tr className="bg-slate-50 dark:bg-slate-800/80 text-left">
-              <th className="px-2 py-2 font-medium text-slate-500">EMI</th>
-              <th className="px-2 py-2 font-medium text-slate-500">Period</th>
-              <th className="px-2 py-2 font-medium text-slate-500 text-right">Days</th>
-              <th className="px-2 py-2 font-medium text-slate-500 text-right">Computed int.</th>
-              <th className="px-2 py-2 font-medium text-slate-500 text-right">Bank int.</th>
-              <th className="px-2 py-2 font-medium text-slate-500 text-right">Δ</th>
-              <th className="px-2 py-2 font-medium text-slate-500">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {validation.computedCycles.map((c) => {
-              const result = validation.results.find((r) => r.monthIndex === c.monthIndex);
-              const draft = draftCycles.find((d) => d.monthIndex === c.monthIndex);
-              const diff = result?.difference;
-              const ok = result?.withinTolerance;
-              const isFirst = c.monthIndex === 0;
-              const tol = isFirst ? STATEMENT_TOLERANCE.firstCycleMax : STATEMENT_TOLERANCE.laterCycleMax;
-
-              return (
-                <tr key={c.monthIndex} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-2 py-2 whitespace-nowrap">
-                    <span className="font-medium">#{c.emiMonth}</span>
-                    <span className="block text-[10px] text-slate-500">{c.emiDate}</span>
-                  </td>
-                  <td className="px-2 py-2 text-[10px] sm:text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                    {c.periodStart} → {c.periodEnd}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums">{c.dayCount}</td>
-                  <td className="px-2 py-2 text-right tabular-nums font-medium">{formatIndianCurrency(c.interest, false)}</td>
-                  <td className="px-2 py-2 text-right">
-                    {canEdit ? (
-                      <input
-                        type="number"
-                        value={draft?.interest ?? ''}
-                        onChange={(e) => setDraftCycles((prev) => prev.map((d) => (
-                          d.monthIndex === c.monthIndex ? { ...d, interest: e.target.value } : d
-                        )))}
-                        placeholder="From bank"
-                        className="w-24 sm:w-28 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs tabular-nums"
-                      />
-                    ) : (
-                      <span className="tabular-nums">{result?.bankInterest != null ? formatIndianCurrency(result.bankInterest, false) : '—'}</span>
-                    )}
-                  </td>
-                  <td className={`px-2 py-2 text-right tabular-nums font-medium ${diff == null ? '' : ok ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {diff != null ? `${diff > 0 ? '+' : ''}${formatIndianCurrency(diff, false)}` : '—'}
-                  </td>
-                  <td className="px-2 py-2">
-                    {result && !validation.hasReference && (
-                      <span className="text-[10px] text-slate-400">Enter bank</span>
-                    )}
-                    {result && validation.hasReference && (
-                      <button
-                        type="button"
-                        onClick={() => setExpandedDiag(expandedDiag === c.monthIndex ? null : c.monthIndex)}
-                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                          ok
-                            ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
-                            : result.attribution === 'unknown_rate_change'
-                              ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
-                              : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
-                        }`}
-                      >
-                        {ok ? 'OK' : result.attribution === 'unknown_rate_change' ? '~Rate date' : `>₹${tol}`}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {validation.hasReference && validation.summary && (
-        <p className="text-xs text-slate-600 dark:text-slate-400">
-          {validation.summary.matched}/{validation.summary.compared} cycles within tolerance
-          {validation.summary.maxDifference > 0 && (
-            <> · max Δ {formatIndianCurrency(validation.summary.maxDifference, false)}</>
-          )}
-          {validation.needsReview && (
-            <span className="text-red-600 dark:text-red-400 font-medium"> — review cycles over ₹{STATEMENT_TOLERANCE.laterCycleMax}</span>
-          )}
-        </p>
-      )}
-
-      {expandedDiag != null && (() => {
-        const result = validation.results.find((r) => r.monthIndex === expandedDiag);
-        if (!result) return null;
-        return (
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-2 text-xs">
-            <p className="font-semibold">Diagnostics — EMI #{result.emiMonth}</p>
-            {result.attributionNote && (
-              <p className="text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 rounded p-2 leading-relaxed">{result.attributionNote}</p>
-            )}
-            <ul className="space-y-1">
-              {result.checks.map((check) => (
-                <li key={check.id} className={check.ok ? 'text-slate-600 dark:text-slate-400' : 'text-red-600 dark:text-red-400'}>
-                  <span className="font-medium">{check.label}:</span> {check.detail}
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })()}
-
-      {canEdit && (
-        <div className="flex justify-end">
-          <Btn size="sm" onClick={handleSave}>Save bank reference</Btn>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
+function BankStatementPanel({ loan }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const entries = useMemo(() => buildLoanBankStatement(loan), [loan]);
-  const computedCycles = useMemo(() => entries
-    .filter((l) => l.txnType === 'interest')
-    .map((line) => ({
-      monthIndex: line.emiMonthIndex,
-      emiMonth: line.emiMonth,
-      emiDate: line.date,
-      periodStart: line.periodStart,
-      periodEnd: line.periodEnd || line.date,
-      dayCount: line.dayCount,
-      rateUsed: line.rateUsed,
-      interest: line.debit,
-      interestExact: line.interestExact,
-      openingPrincipal: line.openingPrincipal,
-      emiStatus: line.emiStatus,
-    }))
-    .sort((a, b) => a.monthIndex - b.monthIndex), [entries]);
 
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -1953,7 +1820,7 @@ function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
     return (
       <Card className="!p-6 sm:!p-8 text-center border-dashed">
         <ScrollText className="w-8 h-8 sm:w-10 sm:h-10 mx-auto text-slate-300 mb-2" />
-        <p className="text-xs sm:text-sm text-slate-500">No statement entries yet. Set a start date and disbursed amount.</p>
+        <p className="text-xs sm:text-sm text-slate-500">No statement entries yet. Add a disbursed amount and ensure the loan has a start date (or disbursement dates).</p>
       </Card>
     );
   }
@@ -1962,12 +1829,6 @@ function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
 
   return (
     <div className="space-y-2.5 sm:space-y-3 animate-fade-in">
-      <StatementReconciliationPanel
-        loan={loan}
-        computedCycles={computedCycles}
-        canEdit={canEdit}
-        onSaveReference={onSaveBankReference}
-      />
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-[10px] sm:text-xs text-slate-500 leading-snug">
           Bank-style ledger: negative balance = amount owed. Interest and EMI post at 6:00 PM on your EMI date each month. Swipe to see all columns.
@@ -2071,24 +1932,39 @@ function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
   );
 }
 
-function LoanClosingSummary({ stats }) {
+function LoanClosingSummary({ stats, onClick }) {
   const closed = stats.isClosed;
   const hasAccel = stats.monthsSavedVsSchedule > 0;
+  const Tag = onClick ? 'button' : 'div';
 
   if (closed) {
     return (
-      <div className="col-span-2 p-2 sm:p-3 text-center border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20">
+      <Tag
+        type={onClick ? 'button' : undefined}
+        onClick={onClick}
+        className={cn(
+          'col-span-2 p-2 sm:p-3 text-center border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20',
+          onClick && 'cursor-pointer hover:bg-white/70 dark:hover:bg-slate-800/40 transition-colors',
+        )}
+      >
         <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500 mb-0.5 sm:mb-1">Loan closing</p>
         <p className="text-sm sm:text-lg font-bold text-emerald-600">Paid off</p>
         <p className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5">
           {formatDuration(stats.totalEmis)} original tenure
         </p>
-      </div>
+      </Tag>
     );
   }
 
   return (
-    <div className="col-span-2 p-2 sm:p-3 border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20">
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={cn(
+        'col-span-2 p-2 sm:p-3 border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20 text-left',
+        onClick && 'cursor-pointer hover:bg-white/70 dark:hover:bg-slate-800/40 transition-colors',
+      )}
+    >
       <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500 mb-1 sm:mb-2 text-center">Loan closing</p>
       <div className="sm:hidden text-center space-y-0.5">
         <p className={`text-sm font-bold tabular-nums ${hasAccel ? 'text-emerald-600' : 'text-slate-800 dark:text-slate-100'}`}>
@@ -2129,15 +2005,21 @@ function LoanClosingSummary({ stats }) {
           <p className="text-[10px] text-slate-500 text-right">Same as standard EMI schedule</p>
         )}
       </div>
-    </div>
+    </Tag>
   );
 }
 
-function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid, onSaveBankReference }) {
+function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid }) {
   const typeInfo = LOAN_TYPES[stats.loanType] || LOAN_TYPES.other;
   const savingsReport = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
   const isDeletePending = pendingAction?.type === 'delete';
   const disbursementCount = getDisbursements(loan).length;
+  const isDesktop = useIsSmUp();
+  const [showClosingTimeline, setShowClosingTimeline] = useState(isDesktop);
+
+  useEffect(() => {
+    setShowClosingTimeline(isDesktop);
+  }, [isDesktop]);
 
   const deleteRows = isDeletePending
     ? [
@@ -2282,32 +2164,33 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             </div>
           ) : detailTab === 'statement' ? (
             <div className="p-3 sm:p-5">
-              <BankStatementPanel
-                loan={loan}
-                canEdit={canEdit}
-                onSaveBankReference={(ref) => onSaveBankReference(loan.id, ref)}
-              />
+              <BankStatementPanel loan={loan} />
             </div>
           ) : (
         <div className="p-3 sm:p-5 space-y-3 sm:space-y-4">
           {canEdit && (
-            <div className="flex gap-1 justify-end">
-              <Btn variant="ghost" size="sm" onClick={onEdit}><Pencil className="w-4 h-4" /></Btn>
-              <Btn variant="ghost" size="sm" onClick={onDelete}><Trash2 className="w-4 h-4 text-red-500" /></Btn>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <SkipEmiAction
+                  loan={loan}
+                  stats={stats}
+                  canEdit={canEdit}
+                  onMarkUnpaid={(monthIndex) => onMarkEmiUnpaid(loan.id, monthIndex)}
+                  onClearUnpaid={(monthIndex) => onClearEmiUnpaid(loan.id, monthIndex)}
+                />
+              </div>
+              <div className="flex gap-1 shrink-0">
+                <Btn variant="ghost" size="sm" onClick={onEdit} title="Edit loan"><Pencil className="w-4 h-4" /></Btn>
+                <Btn variant="ghost" size="sm" onClick={onDelete} title="Delete loan"><Trash2 className="w-4 h-4 text-red-500" /></Btn>
+              </div>
             </div>
           )}
 
-          <LoanDetailsMetrics stats={stats} />
-
-          <UnableToPayEmiPanel
-            loan={loan}
+          <LoanDetailsMetrics
             stats={stats}
-            canEdit={canEdit}
-            onMarkUnpaid={(monthIndex) => onMarkEmiUnpaid(loan.id, monthIndex)}
-            onClearUnpaid={(monthIndex) => onClearEmiUnpaid(loan.id, monthIndex)}
+            showClosingTimeline={showClosingTimeline}
+            onToggleClosingTimeline={() => setShowClosingTimeline((v) => !v)}
           />
-
-          <LoanClosingTimelineCard stats={stats} />
 
           <div>
             <div className="flex justify-between text-sm mb-1.5">
@@ -2520,9 +2403,9 @@ export function LoansTab() {
       : 0;
     const anyClosingAccel = activeClosing.some((item) => item.monthsSavedVsSchedule > 0);
 
-    const hasExplicitDefault = !!(defaultClosingLoanId && closingBreakdown.some((item) => item.id === defaultClosingLoanId));
-    let featuredClosingLoan = hasExplicitDefault
-      ? closingBreakdown.find((item) => item.id === defaultClosingLoanId)
+    const hasExplicitDefault = !!(defaultClosingLoanId && closingBreakdown.some((item) => loanIdsMatch(item.id, defaultClosingLoanId)));
+    let featuredClosingLoan = defaultClosingLoanId
+      ? closingBreakdown.find((item) => loanIdsMatch(item.id, defaultClosingLoanId)) ?? null
       : null;
     if (!featuredClosingLoan && activeClosing.length > 0) {
       featuredClosingLoan = activeClosing.reduce((best, item) => (
@@ -2619,7 +2502,7 @@ export function LoansTab() {
   const handleConfirmDelete = (loanId) => {
     const loan = loans.find((l) => l.id === loanId);
     saveLoans(loans.filter((l) => l.id !== loanId), buildLoanDeleteAudit(loan));
-    if (defaultClosingLoanId === loanId) {
+    if (loanIdsMatch(defaultClosingLoanId, loanId)) {
       setLoansUi({ defaultClosingLoanId: null });
     }
     setPendingAction(null);
@@ -2637,21 +2520,6 @@ export function LoansTab() {
     if (!loan) return;
     const updated = normalizeLoan(updateEmiMonthStatus(loan, monthIndex, 'paid'));
     saveLoans(loans.map((l) => (l.id === loanId ? updated : l)));
-  };
-
-  const handleSaveBankReference = (loanId, bankReference) => {
-    const loan = loans.find((l) => l.id === loanId);
-    if (!loan) return;
-    const updated = normalizeLoan({ ...loan, bankReference });
-    saveLoans(
-      loans.map((l) => (l.id === loanId ? updated : l)),
-      {
-        section: 'loans',
-        action: 'update',
-        entityId: loanId,
-        summary: `Updated bank statement reference for ${loan.name}`,
-      },
-    );
   };
 
   return (
@@ -2704,21 +2572,27 @@ export function LoansTab() {
           value={(() => {
             const featured = summary.featuredClosingLoan;
             if (!featured) return 'Paid off';
-            const closed = featured.isClosed;
-            return closed ? 'Paid off' : formatDuration(featured.actualPayoffMonths);
+            if (featured.isClosed) return 'Paid off';
+            return formatDuration(featured.actualPayoffMonths);
+          })()}
+          secondaryValue={(() => {
+            const featured = summary.featuredClosingLoan;
+            if (!featured || featured.isClosed) return null;
+            return `Standard EMI · ${formatDuration(featured.scheduleTimeRemainingMonths)}`;
           })()}
           sub={showClosingBreakdown
             ? 'Tap to hide'
             : (() => {
                 const featured = summary.featuredClosingLoan;
                 if (!featured) return 'All EMI loans paid off';
-                const closed = featured.isClosed;
-                const label = summary.hasExplicitDefault ? featured.name : featured.name;
-                if (closed) return `${label} · paid off`;
+                if (featured.isClosed) return `${featured.name} · paid off`;
                 const accel = featured.monthsSavedVsSchedule > 0
                   ? ` · ${formatDuration(featured.monthsSavedVsSchedule)} earlier`
                   : '';
-                return `${label} · Std ${formatDuration(featured.scheduleTimeRemainingMonths)}${accel}`;
+                if (summary.hasExplicitDefault) {
+                  return `${featured.name}${accel}`;
+                }
+                return `${featured.name} · longest active loan${accel}`;
               })()}
           color="green"
           onClick={() => { setShowClosingBreakdown((v) => !v); setShowEmiBreakdown(false); setShowInterestBreakdown(false); }}
@@ -2805,7 +2679,6 @@ export function LoansTab() {
               canEdit={canEdit}
               onMarkEmiUnpaid={handleMarkEmiUnpaid}
               onClearEmiUnpaid={handleClearEmiUnpaid}
-              onSaveBankReference={handleSaveBankReference}
             />
           );
         })}

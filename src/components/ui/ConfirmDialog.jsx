@@ -5,6 +5,7 @@ import { Btn } from './index.jsx';
 /** Simple yes/cancel confirmation overlay. */
 export function ConfirmDialog({
   open,
+  title = 'Confirm action',
   message,
   detail,
   confirmLabel = 'Yes',
@@ -37,9 +38,9 @@ export function ConfirmDialog({
             <AlertCircle className={`w-5 h-5 ${variant === 'danger' ? 'text-red-600' : 'text-amber-600'}`} />
           </div>
           <div>
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100">Confirm action</h3>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
             <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{text}</p>
-            {detail && <p className="text-xs text-slate-500 mt-2">{detail}</p>}
+            {detail && <p className="text-xs text-slate-500 mt-2 leading-relaxed whitespace-pre-line">{detail}</p>}
           </div>
         </div>
         <div className="flex gap-2 justify-end">
