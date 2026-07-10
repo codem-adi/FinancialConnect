@@ -467,7 +467,7 @@ function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosin
         ))}
       </div>
       {showClosingTimeline && (
-        <div className="sm:max-w-sm sm:ml-auto animate-fade-in">
+        <div className="animate-fade-in w-full">
           <LoanClosingTimelineCard stats={stats} />
         </div>
       )}
@@ -949,7 +949,7 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
               {draft.startDate && (
                 <p className="col-span-2 text-[10px] text-slate-500">
                   First EMI on <span className="font-medium">{getFirstEmiDate(draft) || '—'}</span>
-                  {' · '}interest and payment post at 6:00 PM on each EMI date
+                  {' · '}interest and payment post at 6:00 AM on each EMI date
                 </p>
               )}
               {tenureExceedsMax && (
@@ -1539,25 +1539,48 @@ function PrepaymentsPanel({
       </div>
 
       {hasPrepays && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] sm:text-xs px-0.5">
-          <span className="tabular-nums">
-            <span className="text-slate-500">Prepaid </span>
-            <span className="font-semibold text-teal-600">{formatIndianCurrency(report.totalPrepaid, false)}</span>
-          </span>
-          <span className="tabular-nums">
-            <span className="text-slate-500">Saved </span>
-            <span className="font-semibold text-emerald-600">{formatIndianCurrency(report.totalSaved, false)}</span>
-          </span>
-          {report.monthsSaved > 0 && (
-            <span className="tabular-nums">
-              <span className="text-slate-500">Earlier </span>
-              <span className="font-semibold text-indigo-600">{payoffAccel.value}</span>
-            </span>
-          )}
-          <span className="tabular-nums">
-            <span className="text-slate-500">Left </span>
-            <span className="font-semibold text-red-500">{formatIndianCurrency(stats.outstanding, false)}</span>
-          </span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+          {[
+            {
+              label: 'Prepaid',
+              value: formatIndianCurrency(report.totalPrepaid, false),
+              accent: 'text-teal-600 dark:text-teal-400',
+              ring: 'border-teal-200/80 dark:border-teal-800/50 bg-teal-50/50 dark:bg-teal-950/20',
+            },
+            {
+              label: 'Saved',
+              value: formatIndianCurrency(report.totalSaved, false),
+              accent: 'text-emerald-600 dark:text-emerald-400',
+              ring: 'border-emerald-200/80 dark:border-emerald-800/50 bg-emerald-50/50 dark:bg-emerald-950/20',
+            },
+            {
+              label: 'Earlier',
+              value: report.monthsSaved > 0 ? payoffAccel.value : 'On schedule',
+              accent: report.monthsSaved > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500',
+              ring: 'border-indigo-200/80 dark:border-indigo-800/50 bg-indigo-50/50 dark:bg-indigo-950/20',
+            },
+            {
+              label: 'Left',
+              value: formatIndianCurrency(stats.outstanding, false),
+              accent: 'text-red-500 dark:text-red-400',
+              ring: 'border-red-200/80 dark:border-red-800/50 bg-red-50/40 dark:bg-red-950/20',
+            },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className={cn(
+                'rounded-lg sm:rounded-xl border px-2.5 py-2 sm:px-3 sm:py-3 min-w-0',
+                card.ring,
+              )}
+            >
+              <p className="text-[9px] sm:text-[10px] uppercase tracking-wider text-slate-500 font-medium truncate">
+                {card.label}
+              </p>
+              <p className={cn('mt-0.5 sm:mt-1 text-sm sm:text-lg font-bold tabular-nums leading-tight break-words', card.accent)}>
+                {card.value}
+              </p>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1647,13 +1670,6 @@ function PrepaymentsPanel({
 
 const STATEMENT_PAGE_SIZES = [25, 50, 100, 200];
 const PREPAYMENTS_PAGE_SIZE = 10;
-
-const STATEMENT_TXN_STYLES = {
-  disbursement: { label: 'Disbursement', className: 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200' },
-  interest: { label: 'Interest', className: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' },
-  emi: { label: 'EMI', className: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300' },
-  prepayment: { label: 'Prepayment', className: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' },
-};
 
 const STATEMENT_ROW_STYLES = {
   disbursement: 'border-l-4 border-l-slate-500 bg-slate-100/80 dark:bg-slate-800/50',
@@ -1768,19 +1784,16 @@ function StatementMobileRow({ entry }) {
 }
 
 function StatementDesktopRow({ entry }) {
-  const tagStyle = STATEMENT_TXN_STYLES[entry.txnType] || STATEMENT_TXN_STYLES.interest;
+  const rowStyle = STATEMENT_ROW_STYLES[entry.txnType] || STATEMENT_ROW_STYLES.interest;
 
   return (
-    <tr className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+    <tr className={cn('border-t border-slate-200 dark:border-slate-700 hover:brightness-[0.98] dark:hover:brightness-110', rowStyle)}>
       <td className="px-3 py-2.5 whitespace-nowrap align-top">
-        <p className="font-medium">{entry.date}</p>
-        {entry.subLabel && <p className="text-[10px] text-slate-500">{entry.subLabel}</p>}
+        <p className="font-medium tabular-nums">{entry.date}</p>
       </td>
-      <td className="px-3 py-2.5 align-top">
-        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase whitespace-nowrap ${tagStyle.className}`}>
-          {tagStyle.label}
-        </span>
-        <p className="text-sm mt-1">{entry.particulars}</p>
+      <td className="px-3 py-2.5 align-top min-w-[12rem]">
+        <p className="font-medium leading-snug">{entry.particulars}</p>
+        {entry.subLabel && <p className="text-xs text-slate-500 mt-0.5">{entry.subLabel}</p>}
       </td>
       <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums text-red-600 align-top">
         {entry.debit > 0 ? formatIndianCurrency(entry.debit, false) : '—'}
@@ -1799,6 +1812,7 @@ function BankStatementPanel({ loan }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const entries = useMemo(() => buildLoanBankStatement(loan), [loan]);
+  const stats = useMemo(() => computeLoanStats(loan), [loan]);
 
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -1825,14 +1839,28 @@ function BankStatementPanel({ loan }) {
     );
   }
 
-  const latestBalance = entries[0]?.balance;
+  const closingBalance = entries[0]?.balance ?? 0;
+  const outstanding = Math.round(stats.outstanding || 0);
+  const balanceMatches = Math.abs(closingBalance - outstanding) <= 1;
 
   return (
     <div className="space-y-2.5 sm:space-y-3 animate-fade-in">
-      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-[10px] sm:text-xs text-slate-500 leading-snug">
-          Bank-style ledger: negative balance = amount owed. Interest and EMI post at 6:00 PM on your EMI date each month. Swipe to see all columns.
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <p className="text-[10px] sm:text-xs text-slate-500 leading-snug sm:max-w-md">
+          Ledger balance = outstanding principal owed. Interest and EMI post at 6:00 AM on the EMI date.
         </p>
+        <div className="text-[10px] sm:text-xs tabular-nums text-left sm:text-right space-y-0.5 shrink-0">
+          <p>
+            <span className="text-slate-500">Closing </span>
+            <span className="font-semibold text-red-600">{formatStatementBalance(closingBalance)}</span>
+          </p>
+          <p>
+            <span className="text-slate-500">Outstanding </span>
+            <span className={cn('font-semibold', balanceMatches ? 'text-emerald-600' : 'text-amber-600')}>
+              {formatIndianCurrency(outstanding, false)}
+            </span>
+          </p>
+        </div>
       </div>
 
       {/* Mobile table — horizontal scroll for full columns */}
@@ -1875,9 +1903,9 @@ function BankStatementPanel({ loan }) {
         </table>
       </div>
 
-      {latestBalance != null && (
+      {closingBalance != null && (
         <p className="text-xs text-slate-500 text-right sm:hidden">
-          Latest balance: <span className="font-semibold text-red-600">{formatStatementBalance(latestBalance)}</span>
+          Closing balance: <span className="font-semibold text-red-600">{formatStatementBalance(closingBalance)}</span>
         </p>
       )}
 

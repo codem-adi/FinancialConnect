@@ -127,8 +127,8 @@ function getPrincipal(loan) {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** EMI interest/payment posts at 6:00 PM on the EMI date */
-export const EMI_POST_OFFSET_MS = 18 * 60 * 60 * 1000;
+/** EMI interest/payment posts at 6:00 AM on the EMI date */
+export const EMI_POST_OFFSET_MS = 6 * 60 * 60 * 1000;
 
 function parseYmd(dateStr) {
   const parts = String(dateStr).slice(0, 10).split('-').map(Number);
@@ -1351,8 +1351,9 @@ function statementSortKey(dateStr, offsetMs = 0) {
 }
 
 /**
- * Liability balance is negative: disbursement opens at −disbursed;
- * interest debits increase what you owe; EMI/prepayment credits reduce it.
+ * Bank-style loan ledger. Balance is outstanding principal owed (positive).
+ * Running balances are recomputed in chronological order so the latest row
+ * always matches current outstanding (prepayments dated mid-cycle included).
  */
 export function buildLoanBankStatement(loan) {
   const disbursedPrincipal = getDisbursedPrincipal(loan);
@@ -1384,12 +1385,13 @@ export function buildLoanBankStatement(loan) {
       emiStatus: null,
       sortOffsetMs: 0,
       sortSubOrder: 0,
+      balance: 0,
       ...line,
       sortOrder: statementSortKey(line.date, offsetMs),
     });
   };
 
-  const pushDisbursementLine = (d, amt, balance) => {
+  const pushDisbursementLine = (d, amt) => {
     disbSortIndex += 1;
     disbSeq += 1;
     const key = d.id || `${d.date}-${d.amount}`;
@@ -1402,9 +1404,27 @@ export function buildLoanBankStatement(loan) {
       particulars: disbSeq === 1 ? 'Loan Disbursement' : 'Tranche Disbursement',
       subLabel: d.notes || (disbSeq > 1 ? `Draw #${disbSeq}` : undefined),
       debit: amt,
-      balance,
     });
     appliedDisbIds.add(key);
+  };
+
+  const pushPrepaymentLine = (pp, amt, emiMonth) => {
+    const key = pp.id || `${pp.date}-${pp.amount}`;
+    const emiDate = emiMonth != null ? emiDateForMonth(loan, emiMonth) : '';
+    // Same calendar day as EMI → post after interest/EMI; earlier days → midday
+    const onEmiDay = emiDate && String(pp.date).slice(0, 10) === String(emiDate).slice(0, 10);
+    pushLine({
+      id: `prepay-${pp.id || key}`,
+      date: pp.date,
+      sortOffsetMs: onEmiDay ? EMI_POST_OFFSET_MS + 10 * 60 * 1000 : 12 * 60 * 60 * 1000,
+      sortSubOrder: onEmiDay ? 3 : 0,
+      txnType: 'prepayment',
+      particulars: 'Prepayment Received',
+      credit: amt,
+      emiMonth: emiMonth != null ? emiMonth + 1 : getEmiMonthIndex(loan, pp.date),
+      notes: pp.notes,
+    });
+    appliedPrepIds.add(key);
   };
 
   for (let month = 0; month < paidEmiMonths; month++) {
@@ -1417,16 +1437,13 @@ export function buildLoanBankStatement(loan) {
 
     if (loan.startDate) {
       const { periodStart, periodEnd } = emiPeriodWindow(loan, month);
-      let running = principalBeforePeriod;
       for (const d of disbursements) {
         const key = d.id || `${d.date}-${d.amount}`;
         if (disbIdsBefore.has(key) || !appliedDisbIds.has(key)) continue;
         const dDate = parseYmd(d.date);
         if (Number.isNaN(dDate.getTime())) continue;
         if (dDate >= periodStart && dDate <= periodEnd) {
-          const amt = toNum(d.amount);
-          running += amt;
-          pushDisbursementLine(d, amt, -running);
+          pushDisbursementLine(d, toNum(d.amount));
         }
       }
     }
@@ -1436,7 +1453,6 @@ export function buildLoanBankStatement(loan) {
     const interestLabel = result.status === 'unpaid'
       ? 'Interest Charged — EMI Not Paid'
       : 'Interest Charged';
-    const balanceAfterInterest = -(principal + result.interest);
 
     pushLine({
       id: `int-${month}`,
@@ -1447,7 +1463,6 @@ export function buildLoanBankStatement(loan) {
       particulars: interestLabel,
       subLabel: `EMI #${month + 1}`,
       debit: result.interest,
-      balance: balanceAfterInterest,
       emiMonth: month + 1,
       emiMonthIndex: month,
       emiStatus: result.status,
@@ -1466,7 +1481,6 @@ export function buildLoanBankStatement(loan) {
           : 'EMI Received',
         subLabel: `EMI #${month + 1}`,
         credit: result.payment,
-        balance: -principal,
         emiMonth: month + 1,
         emiMonthIndex: month,
         emiStatus: 'paid',
@@ -1477,6 +1491,7 @@ export function buildLoanBankStatement(loan) {
       principal = result.newPrincipal;
     }
 
+    // Same order as simulateAmortization: period prepays after EMI posting
     if (loan.startDate) {
       const { periodStart, periodEnd } = emiPeriodWindow(loan, month);
       for (const pp of prepayments) {
@@ -1488,19 +1503,7 @@ export function buildLoanBankStatement(loan) {
           const amt = Math.min(toNum(pp.amount), principal);
           if (amt <= 0) continue;
           principal = Math.max(0, principal - amt);
-          pushLine({
-            id: `prepay-${pp.id || key}`,
-            date: pp.date,
-            sortOffsetMs: EMI_POST_OFFSET_MS + 10 * 60 * 1000,
-            sortSubOrder: 3,
-            txnType: 'prepayment',
-            particulars: 'Prepayment Received',
-            credit: amt,
-            balance: -principal,
-            emiMonth: month + 1,
-            notes: pp.notes,
-          });
-          appliedPrepIds.add(key);
+          pushPrepaymentLine(pp, amt, month);
         }
       }
     }
@@ -1512,7 +1515,7 @@ export function buildLoanBankStatement(loan) {
     const amt = toNum(d.amount);
     if (amt <= 0) continue;
     principal += amt;
-    pushDisbursementLine(d, amt, -principal);
+    pushDisbursementLine(d, amt);
   }
 
   for (const pp of prepayments) {
@@ -1521,24 +1524,22 @@ export function buildLoanBankStatement(loan) {
     const amt = Math.min(toNum(pp.amount), principal);
     if (amt <= 0) continue;
     principal = Math.max(0, principal - amt);
-    pushLine({
-      id: `prepay-${pp.id || key}`,
-      date: pp.date,
-      sortOffsetMs: 10 * 60 * 1000,
-      sortSubOrder: 3,
-      txnType: 'prepayment',
-      particulars: 'Prepayment Received',
-      credit: amt,
-      balance: -principal,
-      emiMonth: getEmiMonthIndex(loan, pp.date),
-      notes: pp.notes,
-    });
-    appliedPrepIds.add(key);
+    pushPrepaymentLine(pp, amt, null);
   }
 
-  return lines.sort((a, b) => {
-    const byTime = b.sortOrder - a.sortOrder;
+  // Chronological running balance (positive = outstanding owed)
+  const ascending = [...lines].sort((a, b) => {
+    const byTime = a.sortOrder - b.sortOrder;
     if (byTime !== 0) return byTime;
-    return (b.sortSubOrder || 0) - (a.sortSubOrder || 0);
+    return (a.sortSubOrder || 0) - (b.sortSubOrder || 0);
   });
+
+  let running = 0;
+  for (const line of ascending) {
+    running = Math.round(running + toNum(line.debit) - toNum(line.credit));
+    line.balance = Math.max(0, running);
+  }
+
+  // Newest first for the UI
+  return ascending.reverse();
 }
