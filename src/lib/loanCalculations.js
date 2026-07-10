@@ -26,6 +26,69 @@ export function formatDuration(months) {
   return `${years} yr ${m} mo`;
 }
 
+/** Local calendar date YYYY-MM-DD (avoids UTC shift from toISOString) */
+export function todayYmd() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Interest accruing per day on a principal balance */
+export function getDailyInterest(principal, annualRate) {
+  const p = toNum(principal);
+  const r = toNum(annualRate);
+  if (p <= 0 || r <= 0) return 0;
+  return Math.round(p * (r / 100) / 365);
+}
+
+/**
+ * Human time skipped from months saved — years / months / weeks / days.
+ */
+export function formatTimeSkipped(months) {
+  const n = Math.max(0, toNum(months));
+  if (n <= 0) {
+    return {
+      primary: 'No time saved yet',
+      secondary: 'Enter an amount to see how much earlier you close',
+      days: 0,
+      weeks: 0,
+      months: 0,
+      years: 0,
+    };
+  }
+  const totalDays = Math.max(1, Math.round(n * 30.4375));
+  const years = Math.floor(totalDays / 365);
+  let rem = totalDays % 365;
+  const mos = Math.floor(rem / 30);
+  rem %= 30;
+  const weeks = Math.floor(rem / 7);
+  const days = rem % 7;
+
+  const parts = [];
+  if (years > 0) parts.push(`${years} yr`);
+  if (mos > 0) parts.push(`${mos} mo`);
+  if (weeks > 0 && years === 0) parts.push(`${weeks} wk`);
+  if (days > 0 && years === 0 && mos === 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+  if (parts.length === 0) parts.push(`${totalDays} day${totalDays === 1 ? '' : 's'}`);
+
+  const detail = [
+    totalDays >= 7 ? `~${totalDays} days` : null,
+    totalDays >= 14 ? `~${Math.round(totalDays / 7)} weeks` : null,
+    n >= 1 ? formatDuration(n) : null,
+  ].filter(Boolean).join(' · ');
+
+  return {
+    primary: parts.join(' '),
+    secondary: detail,
+    days: totalDays,
+    weeks: Math.round(totalDays / 7),
+    months: Math.round(n),
+    years,
+  };
+}
+
 export const LOAN_TYPES = {
   home: { label: 'Home Loan', color: '#6366f1' },
   personal: { label: 'Personal Loan', color: '#8b5cf6' },
@@ -637,11 +700,18 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   }
 
   const outstanding = Math.max(0, balance);
-  const scheduleRemainingMonths = Math.max(0, tenure - paidEmis);
+  const contractualRemainingMonths = Math.max(0, tenure - paidEmis);
   const emi = Math.round(originalEmi);
   const actualPayoffMonths = outstanding <= 0
     ? 0
     : projectMonthsToPayoff(outstanding, emi, defaultRate);
+  // Standard EMI closing uses the same projection as actual, but with prepays removed.
+  // Comparing projection-vs-(tenure − paid) falsely showed "ahead of schedule" when
+  // day-count interest (e.g. a short first EMI period) changed outstanding slightly.
+  let scheduleRemainingMonths = actualPayoffMonths;
+  if (allPrepayments.length > 0) {
+    scheduleRemainingMonths = simulateAmortization({ ...loan, prepayments: [] }, []).actualPayoffMonths;
+  }
   const monthsSavedVsSchedule = Math.max(0, scheduleRemainingMonths - actualPayoffMonths);
 
   const totalPrincipalPaid = principalFromEmi + prepaymentTotal;
@@ -696,7 +766,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     undisbursed: Math.max(0, sanctioned - disbursed),
     outstanding,
     emisPaid: paidEmis,
-    remainingEmis: outstanding <= 0 ? 0 : scheduleRemainingMonths,
+    remainingEmis: outstanding <= 0 ? 0 : contractualRemainingMonths,
     totalEmis: tenure,
     totalTenureLabel: formatDuration(tenure),
     scheduleTimeRemainingMonths: scheduleRemainingMonths,
@@ -854,39 +924,47 @@ export function getBalanceAtDate(loan, targetDate, excludePrepaymentIds = []) {
 }
 
 /** Sum of interest portions on remaining fixed-EMI payments from a given balance */
-function projectRemainingInterest(balance, emi, annualRate, months) {
-  let b = balance;
+function projectRemainingInterest(balance, emi, annualRate, months = 600) {
+  let b = toNum(balance);
   let totalInterest = 0;
-  const monthlyRate = annualRate / 100 / 12;
-  for (let m = 0; m < months && b > 0.01; m++) {
+  const monthlyRate = toNum(annualRate) / 100 / 12;
+  const emiPay = toNum(emi);
+  const maxM = Math.max(0, Math.round(toNum(months)) || 600);
+  for (let m = 0; m < maxM && b > 0.01; m++) {
     const interest = b * monthlyRate;
     totalInterest += interest;
-    const emiPay = Math.min(emi, b + interest);
-    const principalPart = Math.min(Math.max(emiPay - interest, 0), b);
+    const payment = Math.min(emiPay, b + interest);
+    const principalPart = Math.min(Math.max(payment - interest, 0), b);
     b -= principalPart;
   }
   return totalInterest;
 }
 
-/** Interest saved = difference in projected remaining interest before vs after prepayment (reducing-balance EMI) */
+/**
+ * Interest saved by a prepayment = remaining reducing-balance EMI interest
+ * without the prepay, minus remaining interest after it.
+ * Runs until each balance is paid off (not capped to contractual end date).
+ */
 export function calculateInterestSavedForDate(loan, prepaymentAmount, prepaymentDate, excludePrepaymentId = null) {
   const prepayAmt = toNum(prepaymentAmount);
-  if (prepayAmt <= 0 || !loan.startDate) return 0;
+  if (prepayAmt <= 0 || !loan?.startDate) return 0;
 
   const rate = toNum(loan.interestRate);
   const tenure = toNum(loan.tenureMonths);
+  if (rate <= 0 || tenure <= 0) return 0;
+
   const emi = Math.round(calculateEMI(getEmiPrincipal(loan), rate, tenure));
-  const monthsLeft = getMonthsFromDateToLoanEnd(loan, prepaymentDate);
-  if (monthsLeft <= 0 || rate <= 0) return 0;
+  if (emi <= 0) return 0;
 
   const exclude = excludePrepaymentId ? [excludePrepaymentId] : [];
   const balanceAtDate = getBalanceAtDate(loan, prepaymentDate, exclude);
   const cappedPrepay = Math.min(prepayAmt, balanceAtDate);
   if (cappedPrepay <= 0) return 0;
 
-  const before = projectRemainingInterest(balanceAtDate, emi, rate, monthsLeft);
-  const after = projectRemainingInterest(balanceAtDate - cappedPrepay, emi, rate, monthsLeft);
-  return Math.max(0, Math.round(before - after));
+  // Project until paid off (600 mo cap) — same reducing-balance EMI math as payoff timing
+  const interestBefore = projectRemainingInterest(balanceAtDate, emi, rate);
+  const interestAfter = projectRemainingInterest(balanceAtDate - cappedPrepay, emi, rate);
+  return Math.max(0, Math.round(interestBefore - interestAfter));
 }
 
 /** Months of fixed EMI until balance reaches zero */
@@ -1027,7 +1105,18 @@ export function previewPrepaymentImpact(loan, amount, date, excludePrepaymentId 
   const prepayAmt = Math.min(requested, maxAllowed);
   const monthsRemaining = getMonthsFromDateToLoanEnd(loan, date);
   const emiMonth = getEmiMonthIndex(loan, date);
-  const interestSaved = calculateInterestSavedForDate(loan, prepayAmt, date, excludePrepaymentId);
+  const rate = toNum(loan.interestRate);
+  const emi = Math.round(stats.emi || stats.scheduledEmi || 0);
+
+  // Reducing-balance interest on current outstanding / EMI (same basis as days skipped)
+  let interestSaved = 0;
+  if (prepayAmt > 0 && emi > 0 && rate > 0 && stats.outstanding > 0) {
+    const bal = stats.outstanding;
+    const before = projectRemainingInterest(bal, emi, rate);
+    const after = projectRemainingInterest(Math.max(0, bal - prepayAmt), emi, rate);
+    interestSaved = Math.max(0, Math.round(before - after));
+  }
+
   const monthsSavedEarly = getPreviewPrepaymentMonthsSaved(loan, prepayAmt, date);
   return {
     prepayAmount: prepayAmt,
@@ -1039,7 +1128,7 @@ export function previewPrepaymentImpact(loan, amount, date, excludePrepaymentId 
     monthsRemaining,
     emiMonth,
     currentOutstanding: stats.outstanding,
-    newOutstanding: Math.max(0, maxAllowed - prepayAmt),
+    newOutstanding: Math.max(0, stats.outstanding - prepayAmt),
     emi: stats.emi,
     remainingEmis: stats.remainingEmis,
   };

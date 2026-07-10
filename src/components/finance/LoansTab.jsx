@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Plus, Trash2, Pencil, X, Banknote, ArrowDownCircle, CreditCard,
   Clock, TrendingDown, IndianRupee, ChevronDown, ChevronUp, AlertCircle, ScrollText, Star,
+  Copy, Check,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useUiSection } from '../../hooks/useUiSection';
@@ -18,6 +19,7 @@ import {
   clampManualEmiDate, getManualEmiDateBounds, updateEmiMonthStatus,
   getCurrentEmiMonthIndex, getEmiMonthStatus, getEmiDueDateForMonth,
   getFirstEmiDate, getEmiDay,
+  getDailyInterest, formatTimeSkipped, todayYmd,
   getDisbursements, getMaxDisbursementAmount, getMaxDisbursementEditAmount,
   getDisbursementProgressPct, previewPartialDisbursement, applyDisbursement,
   previewDisbursementEdit, updateDisbursement, removeDisbursement,
@@ -71,7 +73,7 @@ function DashboardStatCard({ label, value, secondaryValue, sub, color = 'indigo'
   );
 }
 
-function LoanStatCell({ label, value, sub, valueClassName, onClick }) {
+function LoanStatCell({ label, value, sub, valueClassName, onClick, subClassName }) {
   const Tag = onClick ? 'button' : 'div';
   return (
     <Tag
@@ -84,7 +86,11 @@ function LoanStatCell({ label, value, sub, valueClassName, onClick }) {
     >
       <p className="text-[9px] sm:text-[10px] uppercase text-slate-500 truncate">{label}</p>
       <p className={cn('text-xs sm:text-lg font-bold leading-tight mt-0.5 break-words', valueClassName)}>{value}</p>
-      {sub && <p className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5 truncate">{sub}</p>}
+      {sub && (
+        <p className={cn('text-[9px] sm:text-[10px] text-slate-500 mt-0.5 leading-snug', subClassName ?? 'truncate')}>
+          {sub}
+        </p>
+      )}
     </Tag>
   );
 }
@@ -115,7 +121,8 @@ function EmiBreakdownPanel({ items, total }) {
     interest: acc.interest + item.interest,
     principal: acc.principal + item.principal,
     extra: acc.extra + item.extra,
-  }), { interest: 0, principal: 0, extra: 0 });
+    dailyInterest: acc.dailyInterest + (item.dailyInterest || 0),
+  }), { interest: 0, principal: 0, extra: 0, dailyInterest: 0 });
 
   return (
     <Card className="!p-0 overflow-hidden border-indigo-200 dark:border-indigo-800 animate-fade-in">
@@ -124,6 +131,7 @@ function EmiBreakdownPanel({ items, total }) {
         <p className="text-xs text-slate-500 mt-0.5">
           {formatIndianCurrency(total, false)}/mo total · {formatIndianCurrency(totals.interest, false)} interest · {formatIndianCurrency(totals.principal, false)} principal
           {totals.extra > 0 && ` · +${formatIndianCurrency(totals.extra, false)} extra principal`}
+          {totals.dailyInterest > 0 && ` · ${formatIndianCurrency(totals.dailyInterest, false)}/day`}
         </p>
       </div>
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -154,7 +162,13 @@ function EmiBreakdownPanel({ items, total }) {
                   <p className="text-[10px] text-slate-500">{formatPercent(item.pct, 1)} of outflow</p>
                 </div>
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] sm:text-xs">
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] sm:text-xs">
+                <div className="rounded-lg bg-rose-50 dark:bg-rose-900/20 px-2 py-1.5 text-center">
+                  <p className="text-slate-500">Daily interest</p>
+                  <p className="font-semibold text-rose-700 dark:text-rose-400">
+                    {item.dailyInterest > 0 ? `${formatIndianCurrency(item.dailyInterest, false)}/day` : '—'}
+                  </p>
+                </div>
                 <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5 text-center">
                   <p className="text-slate-500">Interest</p>
                   <p className="font-semibold text-amber-700 dark:text-amber-400">{formatIndianCurrency(item.interest, false)}</p>
@@ -643,11 +657,71 @@ function ManualEmiPaymentsEditor({ payments, onChange, scheduledEmi, pending, on
   );
 }
 
+function buildLoanShareText(loan, stats, isRevolving) {
+  const typeLabel = LOAN_TYPES[loan.loanType]?.label || loan.loanType || '—';
+  const lines = [
+    `Loan: ${loan.name || 'Unnamed'}`,
+    `Lender: ${loan.lender || '—'}`,
+    `Type: ${typeLabel}`,
+  ];
+
+  if (isRevolving) {
+    lines.push(
+      `Credit limit: ${formatIndianCurrency(loan.creditLimit || loan.totalSanctioned)}`,
+      `Outstanding: ${formatIndianCurrency(loan.statementBalance ?? loan.loanAmount)}`,
+      `Min. due: ${formatIndianCurrency(loan.minDue, false)}`,
+      `Interest rate: ${formatRate(loan.interestRate)}`,
+      `Due date: ${loan.dueDate || '—'}`,
+    );
+    if (toNum(loan.manualEmi) > 0) {
+      lines.push(`Actual payment: ${formatIndianCurrency(loan.manualEmi, false)}/mo`);
+    }
+  } else {
+    lines.push(
+      `Sanctioned: ${formatIndianCurrency(loan.totalSanctioned)}`,
+      `Disbursed: ${formatIndianCurrency(stats?.disbursed ?? loan.disbursedAmount ?? loan.loanAmount)}`,
+      `Outstanding: ${formatIndianCurrency(stats?.outstanding ?? 0)}`,
+      `Interest rate: ${formatRate(loan.interestRate)}`,
+      `Tenure: ${loan.tenureMonths || 0} months (${formatDuration(loan.tenureMonths)})`,
+      `Start date: ${loan.startDate || '—'}`,
+      `EMI day: ${getEmiDay(loan)} of each month`,
+      `First EMI: ${getFirstEmiDate(loan) || '—'}`,
+      `EMI basis: ${EMI_BASIS[loan.emiBasis || 'disbursed']?.label || 'Disbursed'}`,
+      `Bank EMI: ${formatIndianCurrency(stats?.emi ?? stats?.scheduledEmi ?? 0, false)}/mo`,
+    );
+    if (stats?.hasManualEmi) {
+      lines.push(`You pay: ${formatIndianCurrency(stats.monthlyPayment, false)}/mo`);
+    }
+    if (stats && !stats.isClosed) {
+      lines.push(
+        `EMIs elapsed: ${stats.emisPaid} / ${stats.totalEmis}`,
+        `Closes in (actual): ${formatDuration(stats.actualPayoffMonths)}`,
+        `Left on standard EMI: ${formatDuration(stats.scheduleTimeRemainingMonths)}`,
+      );
+    } else if (stats?.isClosed) {
+      lines.push('Status: Paid off');
+    }
+    const prepays = getPrepayments(loan);
+    if (prepays.length > 0) {
+      const total = prepays.reduce((s, p) => s + toNum(p.amount), 0);
+      lines.push(`Prepayments: ${prepays.length} · ${formatIndianCurrency(total, false)} total`);
+    }
+    const disbs = getDisbursements(loan);
+    if (disbs.length > 1) {
+      lines.push(`Disbursement draws: ${disbs.length}`);
+    }
+  }
+
+  lines.push(`Shared on: ${todayYmd()}`);
+  return lines.join('\n');
+}
+
 function LoanEditModal({ loan, onSave, onClose, genId }) {
-  const defaultEmiDate = (l) => l.startDate || new Date().toISOString().split('T')[0];
+  const defaultEmiDate = (l) => l.startDate || todayYmd();
   const [draft, setDraft] = useState(normalizeLoan(loan));
   const [pendingEmi, setPendingEmi] = useState(() => ({ date: defaultEmiDate(loan), amount: '' }));
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [copied, setCopied] = useState(false);
   const type = draft.loanType;
   const isRevolving = type === 'credit_card' || type === 'bill';
   const set = (field, value) => setDraft((d) => ({ ...d, [field]: value }));
@@ -657,7 +731,33 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
     setDraft(normalized);
     setPendingEmi({ date: defaultEmiDate(normalized), amount: '' });
     setShowSaveConfirm(false);
+    setCopied(false);
   }, [loan.id]);
+
+  const handleCopyDetails = async () => {
+    try {
+      const saved = buildSaved();
+      const stats = computeLoanStats(saved);
+      const text = buildLoanShareText(saved, stats, isRevolving);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   const collectManualEmiPayments = () => {
     let list = (draft.manualEmiPayments || [])
@@ -831,9 +931,22 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
           className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg max-h-[min(92dvh,100%)] sm:max-h-[90vh] shadow-2xl flex flex-col overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="shrink-0 flex items-center justify-between p-3 sm:p-5 border-b border-slate-200 dark:border-slate-800">
-            <h3 className="font-semibold text-base sm:text-lg">{loan.id && loan.name ? 'Edit Loan' : 'Add Loan'}</h3>
-            <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+          <div className="shrink-0 flex items-center justify-between gap-2 p-3 sm:p-5 border-b border-slate-200 dark:border-slate-800">
+            <h3 className="font-semibold text-base sm:text-lg min-w-0 truncate">{loan.id && loan.name ? 'Edit Loan' : 'Add Loan'}</h3>
+            <div className="flex items-center gap-1 shrink-0">
+              <Btn
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="!px-2 inline-flex items-center gap-1 whitespace-nowrap"
+                onClick={handleCopyDetails}
+                title="Copy all loan details"
+              >
+                {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                <span className="text-xs hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
+              </Btn>
+              <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 space-y-3 sm:space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -1326,7 +1439,7 @@ function DisbursementsPanel({ loan, stats, canEdit, showForm, onAdd, onConfirm, 
 
 function PrepaymentForm({ loan, onConfirm, onCancel, genId }) {
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(() => todayYmd());
   const [showConfirm, setShowConfirm] = useState(false);
 
   const impact = useMemo(() => {
@@ -1339,6 +1452,12 @@ function PrepaymentForm({ loan, onConfirm, onCancel, genId }) {
   const exceedsLimit = toNum(amount) > maxAllowed && toNum(amount) > 0;
   const canApply = impact && impact.prepayAmount > 0 && !impact.exceedsOutstanding;
 
+  const timeSkipped = canApply
+    ? formatTimeSkipped(impact.monthsSavedEarly)
+    : formatTimeSkipped(0);
+  // Reducing-balance EMI: remaining interest with vs without this prepay
+  const moneySaved = canApply ? Math.round(impact.interestSaved || 0) : 0;
+
   const handleApply = () => {
     if (!canApply) return;
     if (!showConfirm) { setShowConfirm(true); return; }
@@ -1349,65 +1468,81 @@ function PrepaymentForm({ loan, onConfirm, onCancel, genId }) {
     ? [
         ['Amount', '—', formatIndianCurrency(impact.prepayAmount)],
         ['Date', '—', date],
-        ['Interest saved', '—', formatIndianCurrency(impact.interestSaved, false)],
-        ['Closes early by', '—', formatPayoffAcceleration(impact.monthsSavedEarly).value],
+        ['Days skipped', '—', `${timeSkipped.days} days (${timeSkipped.primary})`],
+        ['Interest saved', '—', formatIndianCurrency(moneySaved, false)],
         ['New outstanding', fmtStat(impact.currentOutstanding), fmtStat(impact.newOutstanding)],
       ]
     : [];
 
   return (
-    <div className="border-t border-slate-100 dark:border-slate-800 p-4 bg-teal-50/50 dark:bg-teal-900/10">
-      <p className="text-sm font-semibold text-teal-800 dark:text-teal-300 mb-3">Record Prepayment</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-        <InputField label="Prepayment Amount" type="number" value={amount} onChange={setAmount} suffix="₹" />
-        <InputField label="Date Applied" type="date" value={date} onChange={setDate} />
+    <div className="rounded-lg sm:rounded-xl border border-teal-200 dark:border-teal-800 p-3 sm:p-4 bg-teal-50/50 dark:bg-teal-900/10 space-y-3">
+      <p className="text-sm font-semibold text-teal-800 dark:text-teal-300">Record Prepayment</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <InputField label="Prepayment Amount" type="number" value={amount} onChange={(v) => { setAmount(v); setShowConfirm(false); }} suffix="₹" />
+        <InputField label="Date Applied" type="date" value={date} onChange={(v) => { setDate(v || todayYmd()); setShowConfirm(false); }} />
       </div>
 
       {maxAllowed > 0 && (
-        <p className="text-xs text-slate-500 mb-3">
-          Max prepayment on {date}: <span className="font-semibold text-slate-700 dark:text-slate-300">{formatIndianCurrency(maxAllowed)}</span> (outstanding principal)
+        <p className="text-xs text-slate-500">
+          Max on {date}: <span className="font-semibold text-slate-700 dark:text-slate-300">{formatIndianCurrency(maxAllowed)}</span>
         </p>
       )}
 
       {exceedsLimit && (
-        <div className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
-          Cannot prepay more than outstanding principal ({formatIndianCurrency(maxAllowed)}).
+        <div className="p-2.5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300">
+          Cannot prepay more than outstanding ({formatIndianCurrency(maxAllowed)}).
         </div>
       )}
 
-      {canApply && (
-        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 mb-3 space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-600 dark:text-slate-400">Debited from loan principal</span>
-            <span className="font-bold text-red-600">− {formatIndianCurrency(impact.prepayAmount, false)}</span>
+      {canApply ? (
+        <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/30 p-2.5 sm:p-3 space-y-2.5">
+          <p className="text-[10px] uppercase tracking-wider text-emerald-700/80 dark:text-emerald-400/80 font-medium">What this prepay does</p>
+
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            <div className="min-w-0 rounded-md bg-white/70 dark:bg-slate-900/40 px-2 py-1.5">
+              <p className="text-[10px] text-slate-500">Days you skip</p>
+              <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
+                {timeSkipped.days}
+                <span className="text-[10px] sm:text-xs font-medium text-slate-500"> days</span>
+              </p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                {timeSkipped.primary}
+                {timeSkipped.secondary ? ` · ${timeSkipped.secondary}` : ''}
+              </p>
+            </div>
+            <div className="min-w-0 rounded-md bg-white/70 dark:bg-slate-900/40 px-2 py-1.5">
+              <p className="text-[10px] text-slate-500">Interest you save</p>
+              <p className="text-base sm:text-lg font-bold text-emerald-600 tabular-nums leading-tight">
+                {formatIndianCurrency(moneySaved, false)}
+              </p>
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                Total interest avoided over remaining EMIs
+              </p>
+            </div>
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-600 dark:text-slate-400">New outstanding balance</span>
-            <span className="font-bold">{formatIndianCurrency(impact.newOutstanding)}</span>
+
+          <p className="text-[10px] text-slate-500 leading-snug">
+            {formatIndianCurrency(impact.prepayAmount, false)} goes to principal → closes ~{timeSkipped.days} days earlier.
+            Interest saved = remaining EMI interest <span className="font-medium">without</span> this prepay
+            minus interest <span className="font-medium">with</span> it (monthly reducing balance, not days × today&apos;s rate).
+          </p>
+
+          <div className="flex justify-between text-xs pt-1.5 border-t border-emerald-200/80 dark:border-emerald-800/60">
+            <span className="text-slate-500">New outstanding</span>
+            <span className="font-semibold tabular-nums">{formatIndianCurrency(impact.newOutstanding)}</span>
           </div>
-          <div className="flex justify-between text-xs text-slate-500">
-            <span>EMI month {impact.emiMonth}</span>
-          </div>
-          <div className="flex justify-between text-sm pt-2 border-t border-emerald-200 dark:border-emerald-700">
-            <span className="text-emerald-800 dark:text-emerald-300 font-medium">Loan closes early by</span>
-            <span className="font-bold text-emerald-600">{formatPayoffAcceleration(impact.monthsSavedEarly).value}</span>
-          </div>
-          <p className="text-[10px] text-emerald-700 dark:text-emerald-400">{formatPayoffAcceleration(impact.monthsSavedEarly).sub}</p>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-600 dark:text-slate-400">Interest you save</span>
-            <span className="font-bold text-emerald-600">{formatIndianCurrency(impact.interestSaved, false)}</span>
-          </div>
-          <p className="text-[10px] text-slate-500">Added to Loan & Car Payments in monthly expenses · EMI stays {formatIndianCurrency(impact.emi, false)}/mo</p>
         </div>
+      ) : (
+        <p className="text-[11px] text-slate-500">
+          Enter an amount to see how many days you skip and how much interest you save.
+        </p>
       )}
 
       {showConfirm && canApply && (
-        <div className="mb-4">
-          <ChangeReviewPanel title="Confirm prepayment" rows={reviewRows} />
-        </div>
+        <ChangeReviewPanel title="Confirm prepayment" rows={reviewRows} />
       )}
 
-      <div className="flex gap-2 pt-3 border-t border-slate-200/80 dark:border-slate-700/80">
+      <div className="flex gap-2 pt-1">
         {canApply && (
           <Btn size="sm" onClick={handleApply}>{showConfirm ? 'Apply prepayment' : 'Review prepayment'}</Btn>
         )}
@@ -1518,6 +1653,7 @@ function PrepaymentsPanel({
   const visibleItems = sortedItems.slice(0, visibleCount);
   const hasMore = visibleCount < sortedItems.length;
   const remaining = sortedItems.length - visibleCount;
+  const dailyInterest = getDailyInterest(stats.outstanding, loan.interestRate);
 
   return (
     <div className="space-y-3 animate-fade-in">
@@ -1537,6 +1673,25 @@ function PrepaymentsPanel({
           </Btn>
         )}
       </div>
+
+      {!stats.isClosed && stats.outstanding > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200/80 dark:border-amber-800/50 bg-amber-50/60 dark:bg-amber-950/20 px-2.5 py-2 sm:px-3">
+          <div className="min-w-0">
+            <p className="text-[10px] sm:text-xs font-medium text-amber-900 dark:text-amber-200">
+              Interest charged today
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+              Per day on {formatIndianCurrency(stats.outstanding, false)} at {formatRate(loan.interestRate)}
+            </p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-sm sm:text-base font-bold text-amber-700 dark:text-amber-300 tabular-nums leading-tight">
+              {formatIndianCurrency(dailyInterest, false)}
+              <span className="text-[10px] sm:text-xs font-medium text-amber-600/80 dark:text-amber-400/80"> / day</span>
+            </p>
+          </div>
+        </div>
+      )}
 
       {hasPrepays && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
@@ -2072,7 +2227,7 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
                 </span>
               </div>
               <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5 line-clamp-2 sm:line-clamp-none">
-                {loan.lender || '—'} · {formatRate(stats.annualRate)}
+                {loan.lender || '—'} · {formatIndianCurrency(getDailyInterest(stats.outstanding, stats.annualRate), false)}/day
                 {stats.hasManualEmi ? (
                   <> · You pay {formatIndianCurrency(stats.monthlyPayment, false)} (bank {formatIndianCurrency(stats.scheduledEmi || stats.emi, false)})</>
                 ) : (
@@ -2092,13 +2247,35 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
 
       {/* Summary strip */}
       <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 divide-x divide-y sm:divide-y-0 divide-slate-100 dark:divide-slate-800 bg-gradient-to-r from-indigo-50/80 to-purple-50/80 dark:from-indigo-950/30 dark:to-purple-950/30">
-        <LoanStatCell label="Rate" value={formatRate(stats.annualRate)} sub={formatMonthlyRate(stats.annualRate)} />
+        <LoanStatCell
+          label="Daily interest"
+          value={formatIndianCurrency(getDailyInterest(stats.outstanding, stats.annualRate), false)}
+          sub={stats.isClosed || stats.outstanding <= 0 ? 'paid off' : `${formatRate(stats.annualRate)} · on outstanding`}
+          valueClassName="text-rose-600"
+        />
         <LoanStatCell label="Outstanding" value={formatIndianCurrency(stats.outstanding)} sub={stats.disbursedPrincipal > 0 ? `${formatPercent((stats.outstanding / stats.disbursedPrincipal) * 100, 0)} left` : undefined} valueClassName="text-red-500" />
         <LoanStatCell
           label="This Month"
-          value={formatIndianCurrency(stats.monthlyTotalPrincipal || 0, false)}
-          sub={stats.monthlyExtraPrincipal > 0 ? `+${formatIndianCurrency(stats.monthlyExtraPrincipal, false)} extra` : 'principal'}
-          valueClassName="text-emerald-600"
+          value={formatIndianCurrency(stats.monthlyPayment || stats.emi || 0, false)}
+          sub={(
+            <>
+              <span className="text-amber-600 dark:text-amber-400">
+                Int {formatIndianCurrency(stats.monthlyInterest || 0, false)}
+              </span>
+              {' · '}
+              <span className="text-emerald-600 dark:text-emerald-400">
+                Prin {formatIndianCurrency(stats.monthlyScheduledPrincipal || 0, false)}
+              </span>
+              {' · '}
+              <span className={stats.monthlyExtraPrincipal > 0 ? 'text-indigo-600 dark:text-indigo-400' : undefined}>
+                Extra {stats.monthlyExtraPrincipal > 0
+                  ? `+${formatIndianCurrency(stats.monthlyExtraPrincipal, false)}`
+                  : '—'}
+              </span>
+            </>
+          )}
+          subClassName="whitespace-normal"
+          valueClassName="text-indigo-600"
         />
         <LoanStatCell label="Int. Saved" value={formatIndianCurrency(savingsReport.totalSaved || 0)} valueClassName="text-emerald-600" />
         <LoanClosingSummary stats={stats} />
@@ -2384,6 +2561,7 @@ export function LoansTab() {
         interest: stats.monthlyInterest || 0,
         principal: stats.monthlyScheduledPrincipal || 0,
         extra: stats.monthlyExtraPrincipal || 0,
+        dailyInterest: getDailyInterest(stats.outstanding ?? stats.statementBalance, stats.annualRate),
         pct: totalMonthlyEmi > 0 ? (getLoanMonthlyOutflow(stats) / totalMonthlyEmi) * 100 : 0,
       }))
       .sort((a, b) => b.payment - a.payment);
