@@ -178,7 +178,7 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
         {items.map((item) => {
           const typeInfo = LOAN_TYPES[item.loanType] || LOAN_TYPES.other;
-          const closed = item.isClosed || item.actualPayoffMonths <= 0;
+          const closed = item.isClosed;
           const isDefault = defaultLoanId === item.id;
           return (
             <div key={item.id} className={cn('px-3 sm:px-4 py-2.5 sm:py-3', isDefault && 'bg-emerald-50/60 dark:bg-emerald-950/20')}>
@@ -403,7 +403,7 @@ function LoanDetailsMetrics({ stats }) {
 }
 
 function LoanClosingTimelineCard({ stats }) {
-  const closed = stats.isClosed || stats.actualPayoffMonths <= 0;
+  const closed = stats.isClosed;
   const rows = closed
     ? [{
         label: 'Status',
@@ -690,7 +690,12 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
           hasManualEmi: true,
         };
       }
-      return computeMonthlyPaymentBreakdown(saved, stats.outstanding, previewEmi, saved.interestRate);
+      return computeMonthlyPaymentBreakdown(
+        saved,
+        stats.outstanding > 0 ? stats.outstanding : getDisbursedPrincipal(saved),
+        previewEmi,
+        saved.interestRate,
+      );
     } catch {
       return null;
     }
@@ -2067,7 +2072,7 @@ function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
 }
 
 function LoanClosingSummary({ stats }) {
-  const closed = stats.isClosed || stats.actualPayoffMonths <= 0;
+  const closed = stats.isClosed;
   const hasAccel = stats.monthsSavedVsSchedule > 0;
 
   if (closed) {
@@ -2699,7 +2704,7 @@ export function LoansTab() {
           value={(() => {
             const featured = summary.featuredClosingLoan;
             if (!featured) return 'Paid off';
-            const closed = featured.isClosed || featured.actualPayoffMonths <= 0;
+            const closed = featured.isClosed;
             return closed ? 'Paid off' : formatDuration(featured.actualPayoffMonths);
           })()}
           sub={showClosingBreakdown
@@ -2707,7 +2712,7 @@ export function LoansTab() {
             : (() => {
                 const featured = summary.featuredClosingLoan;
                 if (!featured) return 'All EMI loans paid off';
-                const closed = featured.isClosed || featured.actualPayoffMonths <= 0;
+                const closed = featured.isClosed;
                 const label = summary.hasExplicitDefault ? featured.name : featured.name;
                 if (closed) return `${label} · paid off`;
                 const accel = featured.monthsSavedVsSchedule > 0

@@ -54,14 +54,17 @@ export function getDisbursements(loan) {
   if (items.length > 0) return items;
 
   const legacy = toNum(loan.disbursedAmount) || toNum(loan.loanAmount);
-  if (legacy > 0 && loan.startDate) {
-    return [{
-      id: loan.id ? `${loan.id}-legacy-disb` : 'legacy-disb',
-      date: loan.startDate,
-      amount: Math.round(legacy),
-    }];
-  }
-  return [];
+  if (legacy <= 0) return [];
+
+  const date = loan.startDate
+    || (loan.disbursements || []).find((d) => d.date)?.date
+    || new Date().toISOString().split('T')[0];
+
+  return [{
+    id: loan.id ? `${loan.id}-legacy-disb` : 'legacy-disb',
+    date: String(date).slice(0, 10),
+    amount: Math.round(legacy),
+  }];
 }
 
 export function getUndisbursedAmount(loan) {
@@ -695,6 +698,11 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     }
   }
 
+  // Disbursements never entered the EMI schedule — principal still outstanding
+  if (disbursedPrincipal > 0 && balance <= 0 && principalFromEmi === 0 && interestPaid === 0) {
+    balance = Math.max(0, disbursedPrincipal - prepaymentTotal);
+  }
+
   const outstanding = Math.max(0, balance);
   const scheduleRemainingMonths = Math.max(0, tenure - paidEmis);
   const emi = Math.round(originalEmi);
@@ -720,7 +728,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
 
   const paymentBreakdown = computeMonthlyPaymentBreakdown(
     loan,
-    outstanding,
+    outstanding > 0 ? outstanding : disbursedPrincipal,
     scheduledEmi,
     defaultRate,
     Math.min(paidEmis, Math.max(0, tenure - 1)),
@@ -771,7 +779,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     prepaymentTotal: Math.round(prepaymentTotal),
     prepaymentCount: allPrepayments.length,
     totalInterestSaved: Math.round(totalInterestSaved),
-    isClosed: outstanding <= 0 || loan.status === 'closed',
+    isClosed: disbursedPrincipal > 0 && outstanding <= 0,
   };
 }
 
@@ -828,7 +836,7 @@ export function getBalanceAtDate(loan, targetDate, excludePrepaymentIds = []) {
   const allDisbursements = getDisbursements(loan)
     .filter((d) => new Date(d.date) <= target);
 
-  if (!loan.startDate) return allDisbursements.reduce((s, d) => s + toNum(d.amount), 0);
+  if (!loan.startDate) return getDisbursedPrincipal(loan);
 
   const targetStr = formatYmd(target);
   const completedEmis = getPaidEmiCount(loan, target);
@@ -1144,7 +1152,7 @@ function finalizeLoanAfterDisbursementChange(loan, disbursements) {
   return {
     ...updated,
     emi: fixedEmi,
-    status: stats.isClosed ? 'closed' : (loan.status === 'closed' && !stats.isClosed ? 'active' : loan.status),
+    status: deriveLoanStatus(loan, stats),
   };
 }
 
@@ -1333,12 +1341,19 @@ export function normalizeLoan(loan) {
   };
 }
 
+function deriveLoanStatus(loan, stats) {
+  const disbursed = getDisbursedPrincipal(loan);
+  if (disbursed <= 0) return loan.status === 'closed' ? 'closed' : 'active';
+  return stats.outstanding <= 0 ? 'closed' : 'active';
+}
+
 function migrateLegacyDisbursements(loan, disbursedAmount) {
   const amt = Math.round(toNum(disbursedAmount));
-  if (amt <= 0 || !loan.startDate) return [];
+  if (amt <= 0) return [];
+  const date = loan.startDate || new Date().toISOString().split('T')[0];
   return [{
     id: loan.id ? `${loan.id}-legacy-disb` : 'legacy-disb',
-    date: loan.startDate,
+    date: String(date).slice(0, 10),
     amount: amt,
   }];
 }
@@ -1351,7 +1366,7 @@ export function applyPrepayment(loan, prepayment) {
   return {
     ...updated,
     emi: fixedEmi,
-    status: stats.isClosed ? 'closed' : loan.status,
+    status: deriveLoanStatus(updated, stats),
   };
 }
 
@@ -1361,7 +1376,7 @@ function finalizeLoanAfterPrepaymentChange(loan) {
   return {
     ...loan,
     emi: fixedEmi,
-    status: stats.isClosed ? 'closed' : (loan.status === 'closed' && !stats.isClosed ? 'active' : loan.status),
+    status: deriveLoanStatus(loan, stats),
   };
 }
 
