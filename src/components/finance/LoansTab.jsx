@@ -17,10 +17,16 @@ import {
   getManualEmiPayments, getPaidEmiCount, MAX_TENURE_MONTHS, formatManualEmiPaymentsSummary,
   clampManualEmiDate, getManualEmiDateBounds, updateEmiMonthStatus,
   getCurrentEmiMonthIndex, getEmiMonthStatus, getEmiDueDateForMonth,
+  getFirstEmiDate, getEmiDay,
   getDisbursements, getMaxDisbursementAmount, getMaxDisbursementEditAmount,
   getDisbursementProgressPct, previewPartialDisbursement, applyDisbursement,
   previewDisbursementEdit, updateDisbursement, removeDisbursement,
 } from '../../lib/loanCalculations';
+import {
+  validateLoanStatementAgainstBank,
+  STATEMENT_TOLERANCE,
+  UNKNOWN_RATE_CHANGE_NOTE,
+} from '../../lib/loanStatementValidation';
 import {
   buildLoanAudit, buildLoanDeleteAudit, buildPrepaymentAudit,
   buildPartialDisburseAudit, buildDisbursementUpdateAudit, buildDisbursementDeleteAudit,
@@ -728,6 +734,8 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
           ['Interest Rate', formatRate(original.interestRate), formatRate(saved.interestRate)],
           ['Tenure', `${original.tenureMonths} mo`, `${saved.tenureMonths} mo`],
           ['Start Date', original.startDate || '—', saved.startDate || '—'],
+          ['EMI Date', `Day ${getEmiDay(original)}`, `Day ${getEmiDay(saved)}`],
+          ['First EMI', getFirstEmiDate(original) || '—', getFirstEmiDate(saved) || '—'],
           ['EMI Basis', EMI_BASIS[original.emiBasis || 'disbursed']?.label, EMI_BASIS[saved.emiBasis || 'disbursed']?.label],
           ['Bank EMI', fmtStat(existingStats.emi, false), fmtStat(newStats.emi, false)],
           ['Monthly outflow', fmtStat(getLoanMonthlyOutflow(existingStats), false), fmtStat(getLoanMonthlyOutflow(newStats), false)],
@@ -861,6 +869,9 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
                 </div>
               )}
               <InputField label="Interest Rate" type="number" value={draft.interestRate} onChange={(v) => set('interestRate', v)} suffix="% p.a." step={0.01} showWords={false} emptyZero={false} />
+              <p className="col-span-2 text-[10px] text-slate-500 leading-relaxed">
+                Enter your current rate (e.g. 7.45%) from loan start. Unknown rate-change dates are not guessed.
+              </p>
               <InputField
                 label="Tenure"
                 type="number"
@@ -878,13 +889,31 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
                   date: clampManualEmiDate(p.date || v, { startDate: v }),
                 }));
               }} />
+              <InputField
+                label="EMI Date (day of month)"
+                type="number"
+                value={draft.emiDay ?? getEmiDay(draft)}
+                onChange={(v) => set('emiDay', v === '' ? '' : Math.min(31, Math.max(1, Math.round(toNum(v)))))}
+                suffix="of each month"
+                showWords={false}
+                emptyZero={false}
+                allowDecimal={false}
+                min={1}
+                max={31}
+              />
+              {draft.startDate && (
+                <p className="col-span-2 text-[10px] text-slate-500">
+                  First EMI on <span className="font-medium">{getFirstEmiDate(draft) || '—'}</span>
+                  {' · '}interest and payment post at 6:00 PM on each EMI date
+                </p>
+              )}
               {tenureExceedsMax && (
                 <div className="col-span-2 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-xs text-red-700 dark:text-red-300">
                   Tenure cannot exceed 35 years ({MAX_TENURE_MONTHS} months).
                 </div>
               )}
               <p className="col-span-2 text-[10px] text-slate-500">
-                EMIs elapsed: {getPaidEmiCount(draft)} (auto from start date)
+                EMIs elapsed: {getPaidEmiCount(draft)} (auto from EMI schedule)
               </p>
 
               <div className="col-span-2">
@@ -1708,10 +1737,196 @@ function StatementDesktopRow({ entry }) {
   );
 }
 
-function BankStatementPanel({ loan }) {
+function StatementReconciliationPanel({ loan, computedCycles, canEdit, onSaveReference }) {
+  const validation = useMemo(() => validateLoanStatementAgainstBank(loan), [loan, computedCycles]);
+  const [draftCycles, setDraftCycles] = useState(() => (
+    validation.computedCycles.map((c) => {
+      const ref = validation.results.find((r) => r.monthIndex === c.monthIndex);
+      const bank = loan.bankReference?.cycles?.find((b) => toNum(b.monthIndex) === c.monthIndex);
+      return {
+        monthIndex: c.monthIndex,
+        interest: bank?.interest != null ? String(bank.interest) : '',
+        emi: bank?.emi != null ? String(bank.emi) : '',
+      };
+    })
+  ));
+  const [expandedDiag, setExpandedDiag] = useState(null);
+
+  useEffect(() => {
+    setDraftCycles(validation.computedCycles.map((c) => {
+      const bank = loan.bankReference?.cycles?.find((b) => toNum(b.monthIndex) === c.monthIndex);
+      return {
+        monthIndex: c.monthIndex,
+        interest: bank?.interest != null ? String(bank.interest) : '',
+        emi: bank?.emi != null ? String(bank.emi) : '',
+      };
+    }));
+  }, [loan.id, loan.bankReference, validation.computedCycles.length]);
+
+  const handleSave = () => {
+    const cycles = draftCycles
+      .filter((d) => d.interest !== '' && toNum(d.interest) >= 0)
+      .map((d) => ({
+        monthIndex: d.monthIndex,
+        interest: Math.round(toNum(d.interest)),
+        emi: d.emi !== '' ? Math.round(toNum(d.emi)) : null,
+      }));
+    onSaveReference(cycles.length > 0 ? { cycles } : null);
+  };
+
+  if (computedCycles.length === 0) return null;
+
+  return (
+    <Card className="!p-3 sm:!p-4 space-y-3 border-amber-200/80 dark:border-amber-800/50 bg-amber-50/40 dark:bg-amber-950/20">
+      <div>
+        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">BOB statement reconciliation</p>
+        <p className="text-[10px] sm:text-xs text-slate-500 mt-1 leading-relaxed">
+          Daily reducing balance (actual/365). Uses <span className="font-medium">{formatRate(loan.interestRate)}</span> from loan start
+          — no rate-change date is assumed unless you add a verified one. {validation.methodology.rateNote && (
+            <span className="block mt-1 text-amber-800/90 dark:text-amber-200/90">{UNKNOWN_RATE_CHANGE_NOTE}</span>
+          )}
+        </p>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+        <table className="w-full min-w-[36rem] text-xs sm:text-sm">
+          <thead>
+            <tr className="bg-slate-50 dark:bg-slate-800/80 text-left">
+              <th className="px-2 py-2 font-medium text-slate-500">EMI</th>
+              <th className="px-2 py-2 font-medium text-slate-500">Period</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Days</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Computed int.</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Bank int.</th>
+              <th className="px-2 py-2 font-medium text-slate-500 text-right">Δ</th>
+              <th className="px-2 py-2 font-medium text-slate-500">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {validation.computedCycles.map((c) => {
+              const result = validation.results.find((r) => r.monthIndex === c.monthIndex);
+              const draft = draftCycles.find((d) => d.monthIndex === c.monthIndex);
+              const diff = result?.difference;
+              const ok = result?.withinTolerance;
+              const isFirst = c.monthIndex === 0;
+              const tol = isFirst ? STATEMENT_TOLERANCE.firstCycleMax : STATEMENT_TOLERANCE.laterCycleMax;
+
+              return (
+                <tr key={c.monthIndex} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <span className="font-medium">#{c.emiMonth}</span>
+                    <span className="block text-[10px] text-slate-500">{c.emiDate}</span>
+                  </td>
+                  <td className="px-2 py-2 text-[10px] sm:text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                    {c.periodStart} → {c.periodEnd}
+                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums">{c.dayCount}</td>
+                  <td className="px-2 py-2 text-right tabular-nums font-medium">{formatIndianCurrency(c.interest, false)}</td>
+                  <td className="px-2 py-2 text-right">
+                    {canEdit ? (
+                      <input
+                        type="number"
+                        value={draft?.interest ?? ''}
+                        onChange={(e) => setDraftCycles((prev) => prev.map((d) => (
+                          d.monthIndex === c.monthIndex ? { ...d, interest: e.target.value } : d
+                        )))}
+                        placeholder="From bank"
+                        className="w-24 sm:w-28 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs tabular-nums"
+                      />
+                    ) : (
+                      <span className="tabular-nums">{result?.bankInterest != null ? formatIndianCurrency(result.bankInterest, false) : '—'}</span>
+                    )}
+                  </td>
+                  <td className={`px-2 py-2 text-right tabular-nums font-medium ${diff == null ? '' : ok ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {diff != null ? `${diff > 0 ? '+' : ''}${formatIndianCurrency(diff, false)}` : '—'}
+                  </td>
+                  <td className="px-2 py-2">
+                    {result && !validation.hasReference && (
+                      <span className="text-[10px] text-slate-400">Enter bank</span>
+                    )}
+                    {result && validation.hasReference && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedDiag(expandedDiag === c.monthIndex ? null : c.monthIndex)}
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                          ok
+                            ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                            : result.attribution === 'unknown_rate_change'
+                              ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
+                              : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                        }`}
+                      >
+                        {ok ? 'OK' : result.attribution === 'unknown_rate_change' ? '~Rate date' : `>₹${tol}`}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {validation.hasReference && validation.summary && (
+        <p className="text-xs text-slate-600 dark:text-slate-400">
+          {validation.summary.matched}/{validation.summary.compared} cycles within tolerance
+          {validation.summary.maxDifference > 0 && (
+            <> · max Δ {formatIndianCurrency(validation.summary.maxDifference, false)}</>
+          )}
+          {validation.needsReview && (
+            <span className="text-red-600 dark:text-red-400 font-medium"> — review cycles over ₹{STATEMENT_TOLERANCE.laterCycleMax}</span>
+          )}
+        </p>
+      )}
+
+      {expandedDiag != null && (() => {
+        const result = validation.results.find((r) => r.monthIndex === expandedDiag);
+        if (!result) return null;
+        return (
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-2 text-xs">
+            <p className="font-semibold">Diagnostics — EMI #{result.emiMonth}</p>
+            {result.attributionNote && (
+              <p className="text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 rounded p-2 leading-relaxed">{result.attributionNote}</p>
+            )}
+            <ul className="space-y-1">
+              {result.checks.map((check) => (
+                <li key={check.id} className={check.ok ? 'text-slate-600 dark:text-slate-400' : 'text-red-600 dark:text-red-400'}>
+                  <span className="font-medium">{check.label}:</span> {check.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
+
+      {canEdit && (
+        <div className="flex justify-end">
+          <Btn size="sm" onClick={handleSave}>Save bank reference</Btn>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function BankStatementPanel({ loan, canEdit, onSaveBankReference }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const entries = useMemo(() => buildLoanBankStatement(loan), [loan]);
+  const computedCycles = useMemo(() => entries
+    .filter((l) => l.txnType === 'interest')
+    .map((line) => ({
+      monthIndex: line.emiMonthIndex,
+      emiMonth: line.emiMonth,
+      emiDate: line.date,
+      periodStart: line.periodStart,
+      periodEnd: line.periodEnd || line.date,
+      dayCount: line.dayCount,
+      rateUsed: line.rateUsed,
+      interest: line.debit,
+      interestExact: line.interestExact,
+      openingPrincipal: line.openingPrincipal,
+      emiStatus: line.emiStatus,
+    }))
+    .sort((a, b) => a.monthIndex - b.monthIndex), [entries]);
 
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -1742,9 +1957,15 @@ function BankStatementPanel({ loan }) {
 
   return (
     <div className="space-y-2.5 sm:space-y-3 animate-fade-in">
+      <StatementReconciliationPanel
+        loan={loan}
+        computedCycles={computedCycles}
+        canEdit={canEdit}
+        onSaveReference={onSaveBankReference}
+      />
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-[10px] sm:text-xs text-slate-500 leading-snug">
-          Bank-style ledger: negative balance = amount owed. Each EMI date posts interest (debit) then payment (credit). Swipe to see all columns.
+          Bank-style ledger: negative balance = amount owed. Interest and EMI post at 6:00 PM on your EMI date each month. Swipe to see all columns.
         </p>
       </div>
 
@@ -1907,7 +2128,7 @@ function LoanClosingSummary({ stats }) {
   );
 }
 
-function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid }) {
+function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid, onSaveBankReference }) {
   const typeInfo = LOAN_TYPES[stats.loanType] || LOAN_TYPES.other;
   const savingsReport = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
   const isDeletePending = pendingAction?.type === 'delete';
@@ -2056,7 +2277,11 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             </div>
           ) : detailTab === 'statement' ? (
             <div className="p-3 sm:p-5">
-              <BankStatementPanel loan={loan} />
+              <BankStatementPanel
+                loan={loan}
+                canEdit={canEdit}
+                onSaveBankReference={(ref) => onSaveBankReference(loan.id, ref)}
+              />
             </div>
           ) : (
         <div className="p-3 sm:p-5 space-y-3 sm:space-y-4">
@@ -2409,6 +2634,21 @@ export function LoansTab() {
     saveLoans(loans.map((l) => (l.id === loanId ? updated : l)));
   };
 
+  const handleSaveBankReference = (loanId, bankReference) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return;
+    const updated = normalizeLoan({ ...loan, bankReference });
+    saveLoans(
+      loans.map((l) => (l.id === loanId ? updated : l)),
+      {
+        section: 'loans',
+        action: 'update',
+        entityId: loanId,
+        summary: `Updated bank statement reference for ${loan.name}`,
+      },
+    );
+  };
+
   return (
     <div className="space-y-3 sm:space-y-6 animate-fade-in">
       <PageHeader
@@ -2560,6 +2800,7 @@ export function LoansTab() {
               canEdit={canEdit}
               onMarkEmiUnpaid={handleMarkEmiUnpaid}
               onClearEmiUnpaid={handleClearEmiUnpaid}
+              onSaveBankReference={handleSaveBankReference}
             />
           );
         })}

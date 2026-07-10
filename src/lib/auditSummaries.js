@@ -1,5 +1,5 @@
 import { formatIndianCurrency, toNum, formatRate } from './utils';
-import { LOAN_TYPES, normalizeLoan, formatManualEmiPaymentsSummary, applyDisbursement, getDisbursementProgressPct } from './loanCalculations';
+import { LOAN_TYPES, normalizeLoan, formatManualEmiPaymentsSummary, applyDisbursement, getDisbursementProgressPct, getEmiDay } from './loanCalculations';
 import { formatMonthLabel } from './financeStats';
 
 function money(v) {
@@ -35,6 +35,7 @@ export function buildLoanAudit(before, after) {
   pushChange(changes, 'tenure', b.tenureMonths, a.tenureMonths, (x) => `${x} mo`);
   pushChange(changes, 'EMI basis', b.emiBasis, a.emiBasis);
   pushChange(changes, 'start date', b.startDate, a.startDate);
+  pushChange(changes, 'EMI date', getEmiDay(b), getEmiDay(a), (x) => `day ${x}`);
   pushChange(changes, 'min due', b.minDue, a.minDue, money);
   pushChange(changes, 'actual payment', b.manualEmi, a.manualEmi, money);
   pushChange(changes, 'EMI payments', formatManualEmiPaymentsSummary(b), formatManualEmiPaymentsSummary(a));
