@@ -663,6 +663,8 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const appliedPrepIds = new Set();
   const appliedDisbIds = new Set();
   const scheduledEmi = Math.round(originalEmi);
+  /** Paid EMI amounts (excludes unpaid/skipped) — used for payment-pace average */
+  const paidPaymentAmounts = [];
 
   for (let month = 0; month < paidEmis; month++) {
     const period = computePeriodInterestWithDisbursements(balance, loan, month, defaultRate, allDisbursements, appliedDisbIds);
@@ -673,6 +675,9 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     interestPaid += monthResult.interest;
     principalFromEmi += monthResult.principalReduction;
     balance = monthResult.newPrincipal;
+    if (monthResult.status === 'paid' && toNum(monthResult.payment) > 0) {
+      paidPaymentAmounts.push(Math.round(toNum(monthResult.payment)));
+    }
 
     const prep = applyPrepaymentsInPeriod(loan, month, balance, allPrepayments, appliedPrepIds);
     balance = prep.balance;
@@ -702,28 +707,70 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const outstanding = Math.max(0, balance);
   const contractualRemainingMonths = Math.max(0, tenure - paidEmis);
   const emi = Math.round(originalEmi);
-  const actualPayoffMonths = outstanding <= 0
+
+  // (2) After prepayments — current outstanding, continue at bank scheduled EMI
+  const afterPrepayPayoffMonths = outstanding <= 0
     ? 0
     : projectMonthsToPayoff(outstanding, emi, defaultRate);
-  // Standard EMI closing uses the same projection as actual, but with prepays removed.
-  // Comparing projection-vs-(tenure − paid) falsely showed "ahead of schedule" when
-  // day-count interest (e.g. a short first EMI period) changed outstanding slightly.
-  let scheduleRemainingMonths = actualPayoffMonths;
-  if (allPrepayments.length > 0) {
-    scheduleRemainingMonths = simulateAmortization({ ...loan, prepayments: [] }, []).actualPayoffMonths;
+
+  // (1) Original EMI — as if you only ever paid bank EMI (no prepays, no manual overpay)
+  const hasManualHistory = getManualEmiPayments(loan).length > 0;
+  let originalEmiPayoffMonths = afterPrepayPayoffMonths;
+  if (allPrepayments.length > 0 || hasManualHistory) {
+    const baseline = simulateAmortization({
+      ...loan,
+      prepayments: [],
+      manualEmiPayments: [],
+      manualEmi: 0,
+    }, []);
+    originalEmiPayoffMonths = baseline.afterPrepayPayoffMonths ?? baseline.actualPayoffMonths;
   }
-  const monthsSavedVsSchedule = Math.max(0, scheduleRemainingMonths - actualPayoffMonths);
+
+  const paymentBreakdown = computeMonthlyPaymentBreakdown(
+    loan,
+    outstanding,
+    scheduledEmi,
+    defaultRate,
+    Math.min(paidEmis, Math.max(0, tenure - 1)),
+  );
+
+  // (3) Your pace — average of recent paid EMIs (how you actually pay), projected forward
+  const PACE_LOOKBACK = 12;
+  const recentPaid = paidPaymentAmounts.slice(-PACE_LOOKBACK);
+  const currentPay = Math.round(toNum(paymentBreakdown.monthlyPayment));
+  let averageMonthlyPayment = emi;
+  if (recentPaid.length > 0) {
+    const sum = recentPaid.reduce((s, a) => s + a, 0);
+    averageMonthlyPayment = Math.round(sum / recentPaid.length);
+  } else if (currentPay > 0) {
+    averageMonthlyPayment = currentPay;
+  }
+  // Prefer current set payment when it is the active "you pay" amount and differs from history
+  if (paymentBreakdown.hasManualEmi && currentPay > 0) {
+    averageMonthlyPayment = recentPaid.length > 0
+      ? Math.round((averageMonthlyPayment * recentPaid.length + currentPay) / (recentPaid.length + 1))
+      : currentPay;
+  }
+
+  const pacePayoffMonths = outstanding <= 0
+    ? 0
+    : projectMonthsToPayoff(outstanding, Math.max(averageMonthlyPayment, 1), defaultRate);
+
+  const scheduleRemainingMonths = originalEmiPayoffMonths;
+  const actualPayoffMonths = afterPrepayPayoffMonths;
+  const monthsSavedVsSchedule = Math.max(0, originalEmiPayoffMonths - afterPrepayPayoffMonths);
+  const monthsSavedVsPace = afterPrepayPayoffMonths - pacePayoffMonths;
 
   const totalPrincipalPaid = principalFromEmi + prepaymentTotal;
   const totalInterestIfFull = originalEmi * tenure - emiPrincipal;
   // Project interest still to be paid from today's outstanding (reducing-balance EMI),
-  // using actual payoff months so prepayments are reflected — not totalInterest − interestPaid.
+  // using bank-EMI after-prepay path — not totalInterest − interestPaid.
   const remainingInterest = outstanding > 0
     ? Math.round(projectRemainingInterest(
       outstanding,
       emi,
       defaultRate,
-      Math.max(actualPayoffMonths, 1),
+      Math.max(afterPrepayPayoffMonths, 1),
     ))
     : 0;
   const repaymentProgress = disbursedPrincipal > 0 ? (totalPrincipalPaid / disbursedPrincipal) * 100 : 0;
@@ -733,14 +780,6 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const totalInterestSaved = getPrepayments(loan).reduce(
     (sum, p) => sum + calculateInterestSavedForDate(loan, p.amount, p.date, p.id),
     0,
-  );
-
-  const paymentBreakdown = computeMonthlyPaymentBreakdown(
-    loan,
-    outstanding,
-    scheduledEmi,
-    defaultRate,
-    Math.min(paidEmis, Math.max(0, tenure - 1)),
   );
 
   return {
@@ -769,11 +808,20 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     remainingEmis: outstanding <= 0 ? 0 : contractualRemainingMonths,
     totalEmis: tenure,
     totalTenureLabel: formatDuration(tenure),
+    /** (1) Closing if you never prepaid — continue at bank EMI */
+    originalEmiPayoffMonths,
     scheduleTimeRemainingMonths: scheduleRemainingMonths,
     scheduleTimeRemaining: formatDuration(scheduleRemainingMonths),
+    /** (2) Closing after prepays already made — continue at bank EMI */
+    afterPrepayPayoffMonths,
     actualPayoffMonths,
     actualPayoffTimeRemaining: formatDuration(actualPayoffMonths),
+    /** (3) Closing at your recent payment pace (average paid EMI) */
+    averageMonthlyPayment,
+    pacePayoffMonths,
+    pacePayoffTimeRemaining: formatDuration(pacePayoffMonths),
     monthsSavedVsSchedule,
+    monthsSavedVsPace,
     prepaymentPrincipalPct: disbursedPrincipal > 0
       ? Math.min(100, (prepaymentTotal / disbursedPrincipal) * 100)
       : 0,
@@ -783,8 +831,8 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     remainingInterest,
     totalPayable: Math.round(originalEmi * tenure),
     repaymentProgress: Math.min(100, repaymentProgress),
-    timeRemainingMonths: outstanding <= 0 ? 0 : actualPayoffMonths,
-    timeRemaining: formatDuration(outstanding <= 0 ? 0 : actualPayoffMonths),
+    timeRemainingMonths: outstanding <= 0 ? 0 : pacePayoffMonths,
+    timeRemaining: formatDuration(outstanding <= 0 ? 0 : pacePayoffMonths),
     prepaymentTotal: Math.round(prepaymentTotal),
     prepaymentCount: allPrepayments.length,
     totalInterestSaved: Math.round(totalInterestSaved),

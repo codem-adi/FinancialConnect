@@ -73,6 +73,74 @@ function DashboardStatCard({ label, value, secondaryValue, sub, color = 'indigo'
   );
 }
 
+function LoanPaymentsDashboardFooter({ monthlyInterest, monthlyPrincipal, interestPaid }) {
+  return (
+    <div className="mt-2 sm:mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+      <div className="grid grid-cols-2 gap-1 sm:gap-2">
+        <div className="min-w-0 text-left">
+          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">This month</p>
+          <p className="text-[10px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
+            Int {formatIndianCurrency(monthlyInterest, false)}
+          </p>
+          <p className="text-[9px] sm:text-[10px] text-slate-500 tabular-nums leading-tight">
+            Prin {formatIndianCurrency(monthlyPrincipal, false)}
+          </p>
+        </div>
+        <div className="min-w-0 text-right">
+          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Interest paid</p>
+          <p className="text-[10px] sm:text-xs font-bold text-amber-600 dark:text-amber-400 tabular-nums leading-tight">
+            {formatIndianCurrency(interestPaid)}
+          </p>
+          <p className="text-[9px] sm:text-[10px] text-slate-500 leading-tight">lifetime</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoanClosingDashboardFooter({ featured }) {
+  if (!featured || featured.isClosed) return null;
+  const originalLeft = featured.originalEmiPayoffMonths ?? featured.scheduleTimeRemainingMonths ?? 0;
+  const afterPrepayLeft = featured.afterPrepayPayoffMonths ?? featured.actualPayoffMonths ?? 0;
+  const paceLeft = featured.pacePayoffMonths ?? featured.actualPayoffMonths ?? 0;
+  const paceDelta = featured.monthsSavedVsPace ?? 0;
+  const prepaySaved = featured.monthsSavedVsSchedule ?? 0;
+
+  return (
+    <div className="mt-2 sm:mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+      <div className="grid grid-cols-3 gap-1 sm:gap-2">
+        <div className="min-w-0 text-left">
+          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Original EMI</p>
+          <p className="text-[10px] sm:text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums leading-tight">
+            {formatDuration(originalLeft)}
+          </p>
+        </div>
+        <div className="min-w-0 text-center">
+          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">After prepay</p>
+          <p className="text-[10px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
+            {formatDuration(afterPrepayLeft)}
+          </p>
+        </div>
+        <div className="min-w-0 text-right">
+          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Your pace</p>
+          <p className="text-[10px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
+            {formatDuration(paceLeft)}
+          </p>
+        </div>
+      </div>
+      <p className="text-[8px] sm:text-[10px] text-slate-500 leading-snug">
+        {paceDelta > 0
+          ? `${formatDuration(paceDelta)} sooner at avg ${formatIndianCurrency(featured.averageMonthlyPayment || 0, false)}/mo`
+          : paceDelta < 0
+            ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+            : prepaySaved > 0
+              ? `${formatDuration(prepaySaved)} saved by prepays`
+              : 'Same as bank EMI pace'}
+      </p>
+    </div>
+  );
+}
+
 function LoanStatCell({ label, value, sub, valueClassName, onClick, subClassName }) {
   const Tag = onClick ? 'button' : 'div';
   return (
@@ -109,7 +177,7 @@ function useIsSmUp() {
   return matches;
 }
 
-function EmiBreakdownPanel({ items, total }) {
+function EmiBreakdownPanel({ items, total, interestPaidTotal = 0 }) {
   if (items.length === 0) {
     return (
       <Card className="!p-4 border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20">
@@ -122,7 +190,9 @@ function EmiBreakdownPanel({ items, total }) {
     principal: acc.principal + item.principal,
     extra: acc.extra + item.extra,
     dailyInterest: acc.dailyInterest + (item.dailyInterest || 0),
-  }), { interest: 0, principal: 0, extra: 0, dailyInterest: 0 });
+    interestPaid: acc.interestPaid + (item.interestPaid || 0),
+  }), { interest: 0, principal: 0, extra: 0, dailyInterest: 0, interestPaid: 0 });
+  const lifetimeInterest = interestPaidTotal || totals.interestPaid;
 
   return (
     <Card className="!p-0 overflow-hidden border-indigo-200 dark:border-indigo-800 animate-fade-in">
@@ -130,8 +200,9 @@ function EmiBreakdownPanel({ items, total }) {
         <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Monthly payment split by loan</p>
         <p className="text-xs text-slate-500 mt-0.5">
           {formatIndianCurrency(total, false)}/mo total · {formatIndianCurrency(totals.interest, false)} interest · {formatIndianCurrency(totals.principal, false)} principal
-          {totals.extra > 0 && ` · +${formatIndianCurrency(totals.extra, false)} extra principal`}
+          {totals.extra > 0 && ` · +${formatIndianCurrency(totals.extra, false)} extra`}
           {totals.dailyInterest > 0 && ` · ${formatIndianCurrency(totals.dailyInterest, false)}/day`}
+          {lifetimeInterest > 0 && ` · ${formatIndianCurrency(lifetimeInterest)} interest paid`}
         </p>
       </div>
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -151,15 +222,24 @@ function EmiBreakdownPanel({ items, total }) {
                         Manual
                       </span>
                     )}
+                    {item.isClosed && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium">
+                        Closed
+                      </span>
+                    )}
                   </div>
                   {item.lender && <p className="text-xs text-slate-500 truncate">{item.lender}</p>}
-                  {item.hasManualEmi && item.scheduledEmi !== item.payment && (
+                  {item.hasManualEmi && item.scheduledEmi !== item.payment && item.payment > 0 && (
                     <p className="text-[10px] text-slate-500 mt-0.5">Bank EMI {formatIndianCurrency(item.scheduledEmi, false)}</p>
                   )}
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="font-bold text-indigo-600 dark:text-indigo-400">{formatIndianCurrency(item.payment, false)}</p>
-                  <p className="text-[10px] text-slate-500">{formatPercent(item.pct, 1)} of outflow</p>
+                  <p className="font-bold text-indigo-600 dark:text-indigo-400">
+                    {item.payment > 0 ? formatIndianCurrency(item.payment, false) : '—'}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {item.payment > 0 ? `${formatPercent(item.pct, 1)} of outflow` : 'no EMI'}
+                  </p>
                 </div>
               </div>
               <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] sm:text-xs">
@@ -170,18 +250,24 @@ function EmiBreakdownPanel({ items, total }) {
                   </p>
                 </div>
                 <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">Interest</p>
+                  <p className="text-slate-500">Interest /mo</p>
                   <p className="font-semibold text-amber-700 dark:text-amber-400">{formatIndianCurrency(item.interest, false)}</p>
                 </div>
                 <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-center">
                   <p className="text-slate-500">Principal</p>
                   <p className="font-semibold text-emerald-700 dark:text-emerald-400">{formatIndianCurrency(item.principal, false)}</p>
-                </div>
-                <div className="rounded-lg bg-indigo-50 dark:bg-indigo-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">+ Extra</p>
-                  <p className={`font-semibold ${item.extra > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>
-                    {item.extra > 0 ? `+${formatIndianCurrency(item.extra, false)}` : '—'}
+                  <p className={`text-[9px] mt-0.5 font-medium ${item.extra > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>
+                    Extra {item.extra > 0 ? `+${formatIndianCurrency(item.extra, false)}` : '—'}
                   </p>
+                </div>
+                <div className="rounded-lg bg-orange-50 dark:bg-orange-900/20 px-2 py-1.5 text-center">
+                  <p className="text-slate-500">Interest paid</p>
+                  <p className="font-semibold text-orange-700 dark:text-orange-400">
+                    {item.interestPaid > 0 ? formatIndianCurrency(item.interestPaid) : '—'}
+                  </p>
+                  {item.interestPaidPct > 0 && (
+                    <p className="text-[9px] text-slate-400 mt-0.5">{formatPercent(item.interestPaidPct, 0)} of total</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -261,29 +347,32 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
               ) : (
                 <div className="grid grid-cols-3 gap-2 text-[10px] sm:text-xs">
                   <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">Original</p>
-                    <p className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums">{formatDuration(item.totalEmis)}</p>
+                    <p className="text-slate-500">Original EMI</p>
+                    <p className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums">{formatDuration(item.originalEmiPayoffMonths ?? item.scheduleTimeRemainingMonths)}</p>
                   </div>
                   <div className="rounded-lg bg-indigo-50 dark:bg-indigo-900/20 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">Standard EMI left</p>
-                    <p className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">{formatDuration(item.scheduleTimeRemainingMonths)}</p>
+                    <p className="text-slate-500">After prepay</p>
+                    <p className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">{formatDuration(item.afterPrepayPayoffMonths ?? item.actualPayoffMonths)}</p>
                   </div>
                   <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">Closes in</p>
-                    <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatDuration(item.actualPayoffMonths)}</p>
+                    <p className="text-slate-500">Your pace</p>
+                    <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatDuration(item.pacePayoffMonths ?? item.actualPayoffMonths)}</p>
                   </div>
                 </div>
               )}
-              {!closed && item.monthsSavedVsSchedule > 0 && (
+              {!closed && (item.monthsSavedVsPace > 0 || item.monthsSavedVsSchedule > 0) && (
                 <p className="text-[10px] text-teal-700 dark:text-teal-400 mt-2 text-right">
-                  {formatDuration(item.monthsSavedVsSchedule)} earlier
-                  {item.prepaymentCount > 0
-                    ? ` · ${formatPercent(item.prepaymentPrincipalPct, 0)} prepaid`
-                    : ' · ahead of bank schedule'}
+                  {item.monthsSavedVsPace > 0
+                    ? `${formatDuration(item.monthsSavedVsPace)} sooner at avg ${formatIndianCurrency(item.averageMonthlyPayment || 0, false)}/mo`
+                    : `${formatDuration(item.monthsSavedVsSchedule)} earlier from prepays`}
                 </p>
               )}
-              {!closed && item.monthsSavedVsSchedule <= 0 && (
-                <p className="text-[10px] text-slate-500 mt-2 text-right">Same as standard EMI schedule</p>
+              {!closed && !(item.monthsSavedVsPace > 0) && !(item.monthsSavedVsSchedule > 0) && (
+                <p className="text-[10px] text-slate-500 mt-2 text-right">
+                  {item.monthsSavedVsPace < 0
+                    ? `${formatDuration(Math.abs(item.monthsSavedVsPace))} longer at current pace`
+                    : 'Same pace as bank EMI'}
+                </p>
               )}
             </div>
           );
@@ -300,52 +389,6 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
         }}
         onCancel={() => setPendingDefault(null)}
       />
-    </Card>
-  );
-}
-
-function InterestBreakdownPanel({ items, total }) {
-  if (items.length === 0) {
-    return (
-      <Card className="!p-4 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
-        <p className="text-sm text-slate-500 text-center">No interest paid yet</p>
-      </Card>
-    );
-  }
-  return (
-    <Card className="!p-0 overflow-hidden border-amber-200 dark:border-amber-800 animate-fade-in">
-      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100 dark:border-slate-800 bg-amber-50/80 dark:bg-amber-950/30">
-        <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Interest paid by loan</p>
-        <p className="text-xs text-slate-500 mt-0.5">Lifetime total {formatIndianCurrency(total)}</p>
-      </div>
-      <div className="divide-y divide-slate-100 dark:divide-slate-800">
-        {items.map((item) => {
-          const typeInfo = LOAN_TYPES[item.loanType] || LOAN_TYPES.other;
-          return (
-            <div key={item.id} className="px-3 sm:px-4 py-2.5 sm:py-3 flex items-center gap-2 sm:gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium text-sm truncate">{item.name}</p>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>
-                    {typeInfo.label}
-                  </span>
-                </div>
-                {item.lender && <p className="text-xs text-slate-500 truncate">{item.lender}</p>}
-                {item.monthlyInterest > 0 && (
-                  <p className="text-[10px] text-slate-500 mt-0.5">~{formatIndianCurrency(item.monthlyInterest, false)}/mo interest now</p>
-                )}
-              </div>
-              <div className="text-right shrink-0">
-                <p className="font-bold text-amber-600 dark:text-amber-400">{formatIndianCurrency(item.interestPaid)}</p>
-                <p className="text-[10px] text-slate-500">{formatPercent(item.pct, 1)} of total</p>
-              </div>
-              <div className="w-16 sm:w-24 shrink-0 hidden sm:block">
-                <ProgressBar value={item.pct} color="#f59e0b" height="h-1.5" />
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </Card>
   );
 }
@@ -491,12 +534,13 @@ function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosin
 
 function LoanClosingTimelineCard({ stats }) {
   const closed = stats.isClosed;
-  const hasAccel = !closed && stats.monthsSavedVsSchedule > 0;
-  const scheduleLeft = Math.max(0, stats.scheduleTimeRemainingMonths || 0);
-  const actualLeft = Math.max(0, stats.actualPayoffMonths || 0);
-  const progressPct = scheduleLeft > 0
-    ? Math.min(100, Math.max(8, ((scheduleLeft - actualLeft) / scheduleLeft) * 100))
-    : 0;
+  const originalLeft = Math.max(0, stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths ?? 0);
+  const afterPrepayLeft = Math.max(0, stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths ?? 0);
+  const paceLeft = Math.max(0, stats.pacePayoffMonths ?? stats.actualPayoffMonths ?? 0);
+  const paceDelta = stats.monthsSavedVsPace ?? (afterPrepayLeft - paceLeft);
+  const prepaySaved = Math.max(0, stats.monthsSavedVsSchedule || 0);
+  const maxLeft = Math.max(originalLeft, afterPrepayLeft, paceLeft, 1);
+  const paceBarPct = Math.min(100, Math.max(8, (paceLeft / maxLeft) * 100));
 
   if (closed) {
     return (
@@ -511,17 +555,23 @@ function LoanClosingTimelineCard({ stats }) {
 
   return (
     <div className="rounded-lg border border-teal-200/70 dark:border-teal-800/50 bg-gradient-to-r from-teal-50/50 via-white to-indigo-50/40 dark:from-teal-950/20 dark:via-slate-900/40 dark:to-indigo-950/20 px-2.5 py-2 animate-fade-in">
-      <div className="flex items-baseline justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-wider text-slate-400">Closes in</p>
-          <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
-            {formatDuration(actualLeft)}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="min-w-0 text-left">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">Original EMI</p>
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums leading-tight">
+            {formatDuration(originalLeft)}
           </p>
         </div>
-        <div className="text-right min-w-0">
-          <p className="text-[9px] uppercase tracking-wider text-slate-400">Std EMI</p>
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums leading-tight">
-            {formatDuration(scheduleLeft)}
+        <div className="min-w-0 text-center">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">After prepay</p>
+          <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
+            {formatDuration(afterPrepayLeft)}
+          </p>
+        </div>
+        <div className="min-w-0 text-right">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">Your pace</p>
+          <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
+            {formatDuration(paceLeft)}
           </p>
         </div>
       </div>
@@ -529,20 +579,18 @@ function LoanClosingTimelineCard({ stats }) {
       <div className="mt-1.5 h-1 rounded-full bg-slate-200/80 dark:bg-slate-700/80 overflow-hidden relative">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-400 to-teal-500"
-          style={{ width: `${hasAccel ? Math.max(12, 100 - progressPct) : 100}%` }}
+          style={{ width: `${paceBarPct}%` }}
         />
-        {hasAccel && (
-          <div
-            className="absolute inset-y-0 right-0 rounded-full bg-indigo-300/50 dark:bg-indigo-500/30"
-            style={{ width: `${progressPct}%` }}
-          />
-        )}
       </div>
 
       <p className="mt-1 text-[10px] text-slate-500 leading-snug">
-        {hasAccel
-          ? `${formatDuration(stats.monthsSavedVsSchedule)} earlier than bank schedule`
-          : 'On track with standard EMI'}
+        {paceDelta > 0
+          ? `${formatDuration(paceDelta)} sooner at avg ${formatIndianCurrency(stats.averageMonthlyPayment || stats.monthlyPayment || 0, false)}/mo`
+          : paceDelta < 0
+            ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+            : prepaySaved > 0
+              ? `${formatDuration(prepaySaved)} saved by prepays · same as bank EMI going forward`
+              : 'On track with bank EMI'}
       </p>
     </div>
   );
@@ -694,9 +742,9 @@ function buildLoanShareText(loan, stats, isRevolving) {
     }
     if (stats && !stats.isClosed) {
       lines.push(
-        `EMIs elapsed: ${stats.emisPaid} / ${stats.totalEmis}`,
-        `Closes in (actual): ${formatDuration(stats.actualPayoffMonths)}`,
-        `Left on standard EMI: ${formatDuration(stats.scheduleTimeRemainingMonths)}`,
+        `Original EMI closing: ${formatDuration(stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths)}`,
+        `After prepay closing: ${formatDuration(stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths)}`,
+        `Your pace closing: ${formatDuration(stats.pacePayoffMonths ?? stats.actualPayoffMonths)} (avg ${formatIndianCurrency(stats.averageMonthlyPayment || stats.monthlyPayment || 0, false)}/mo)`,
       );
     } else if (stats?.isClosed) {
       lines.push('Status: Paid off');
@@ -888,8 +936,9 @@ function LoanEditModal({ loan, onSave, onClose, genId }) {
           ['Bank EMI', fmtStat(existingStats.emi, false), fmtStat(newStats.emi, false)],
           ['Monthly outflow', fmtStat(getLoanMonthlyOutflow(existingStats), false), fmtStat(getLoanMonthlyOutflow(newStats), false)],
           ['Outstanding', fmtStat(existingStats.outstanding), fmtStat(newStats.outstanding)],
-          ['Time left (with prepay)', formatDuration(existingStats.actualPayoffMonths), formatDuration(newStats.actualPayoffMonths)],
-          ['Time left (standard EMI)', formatDuration(existingStats.scheduleTimeRemainingMonths), formatDuration(newStats.scheduleTimeRemainingMonths)],
+          ['Original EMI closing', formatDuration(existingStats.scheduleTimeRemainingMonths), formatDuration(newStats.scheduleTimeRemainingMonths)],
+          ['After prepay closing', formatDuration(existingStats.actualPayoffMonths), formatDuration(newStats.actualPayoffMonths)],
+          ['Your pace closing', formatDuration(existingStats.pacePayoffMonths ?? existingStats.actualPayoffMonths), formatDuration(newStats.pacePayoffMonths ?? newStats.actualPayoffMonths)],
         );
       }
     }
@@ -2117,7 +2166,10 @@ function BankStatementPanel({ loan }) {
 
 function LoanClosingSummary({ stats, onClick }) {
   const closed = stats.isClosed;
-  const hasAccel = stats.monthsSavedVsSchedule > 0;
+  const originalLeft = stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths;
+  const afterPrepayLeft = stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths;
+  const paceLeft = stats.pacePayoffMonths ?? stats.actualPayoffMonths;
+  const paceDelta = stats.monthsSavedVsPace ?? 0;
   const Tag = onClick ? 'button' : 'div';
 
   if (closed) {
@@ -2150,43 +2202,41 @@ function LoanClosingSummary({ stats, onClick }) {
     >
       <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500 mb-1 sm:mb-2 text-center">Loan closing</p>
       <div className="sm:hidden text-center space-y-0.5">
-        <p className={`text-sm font-bold tabular-nums ${hasAccel ? 'text-emerald-600' : 'text-slate-800 dark:text-slate-100'}`}>
-          {formatDuration(stats.actualPayoffMonths)}
+        <p className="text-sm font-bold tabular-nums text-emerald-600">
+          {formatDuration(paceLeft)}
         </p>
         <p className="text-[9px] text-slate-500 leading-snug">
-          Std {formatDuration(stats.scheduleTimeRemainingMonths)}
-          {hasAccel ? ` · ${formatDuration(stats.monthsSavedVsSchedule)} earlier` : ''}
+          Prepay {formatDuration(afterPrepayLeft)} · Orig {formatDuration(originalLeft)}
         </p>
       </div>
       <div className="hidden sm:block space-y-2 text-xs max-w-xs mx-auto">
         <div className="flex items-center justify-between gap-3">
-          <span className="text-slate-500 shrink-0">Original loan</span>
+          <span className="text-slate-500 shrink-0">Original EMI</span>
           <span className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums">
-            {formatDuration(stats.totalEmis)}
+            {formatDuration(originalLeft)}
           </span>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className="text-slate-500 shrink-0">Left on standard EMI</span>
+          <span className="text-slate-500 shrink-0">After prepay</span>
           <span className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">
-            {formatDuration(stats.scheduleTimeRemainingMonths)}
+            {formatDuration(afterPrepayLeft)}
           </span>
         </div>
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700">
-          <span className="text-slate-700 dark:text-slate-300 font-medium shrink-0">Closes in (actual)</span>
-          <span className={`font-bold tabular-nums ${hasAccel ? 'text-emerald-600' : 'text-slate-800 dark:text-slate-100'}`}>
-            {formatDuration(stats.actualPayoffMonths)}
+          <span className="text-slate-700 dark:text-slate-300 font-medium shrink-0">Your pace</span>
+          <span className="font-bold tabular-nums text-emerald-600">
+            {formatDuration(paceLeft)}
           </span>
         </div>
-        {hasAccel ? (
-          <p className="text-[10px] text-teal-700 dark:text-teal-400 text-right leading-snug">
-            {formatDuration(stats.monthsSavedVsSchedule)} earlier
-            {stats.prepaymentCount > 0
-              ? ` · ${formatPercent(stats.prepaymentPrincipalPct, 0)} prepaid`
-              : ' · ahead of bank schedule'}
-          </p>
-        ) : (
-          <p className="text-[10px] text-slate-500 text-right">Same as standard EMI schedule</p>
-        )}
+        <p className="text-[10px] text-slate-500 text-right leading-snug">
+          {paceDelta > 0
+            ? `${formatDuration(paceDelta)} sooner · avg ${formatIndianCurrency(stats.averageMonthlyPayment || 0, false)}/mo`
+            : paceDelta < 0
+              ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+              : stats.monthsSavedVsSchedule > 0
+                ? `${formatDuration(stats.monthsSavedVsSchedule)} saved by prepays`
+                : 'Same as bank EMI pace'}
+        </p>
       </div>
     </Tag>
   );
@@ -2504,8 +2554,7 @@ export function LoansTab() {
   const [pendingAction, setPendingAction] = useState(null);
   const [pendingPrepayDelete, setPendingPrepayDelete] = useState(null);
   const [editPrepayment, setEditPrepayment] = useState(null);
-  const [showEmiBreakdown, setShowEmiBreakdown] = useState(false);
-  const [showInterestBreakdown, setShowInterestBreakdown] = useState(false);
+  const [showPaymentsBreakdown, setShowPaymentsBreakdown] = useState(false);
   const [showClosingBreakdown, setShowClosingBreakdown] = useState(false);
 
   const expandedIds = loansUi.expandedIds || [];
@@ -2548,36 +2597,30 @@ export function LoansTab() {
       ? Math.min(100, (totalPrincipalPaid / totalPrincipalTaken) * 100)
       : 0;
 
-    const emiBreakdown = active
-      .filter(({ stats }) => getLoanMonthlyOutflow(stats) > 0)
-      .map(({ loan, stats }) => ({
-        id: loan.id,
-        name: loan.name || 'Unnamed',
-        lender: loan.lender,
-        loanType: stats.loanType,
-        payment: getLoanMonthlyOutflow(stats),
-        scheduledEmi: stats.scheduledEmi || stats.emi,
-        hasManualEmi: stats.hasManualEmi,
-        interest: stats.monthlyInterest || 0,
-        principal: stats.monthlyScheduledPrincipal || 0,
-        extra: stats.monthlyExtraPrincipal || 0,
-        dailyInterest: getDailyInterest(stats.outstanding ?? stats.statementBalance, stats.annualRate),
-        pct: totalMonthlyEmi > 0 ? (getLoanMonthlyOutflow(stats) / totalMonthlyEmi) * 100 : 0,
-      }))
-      .sort((a, b) => b.payment - a.payment);
-
-    const interestBreakdown = allStats
-      .filter(({ stats }) => (stats.interestPaid || 0) > 0)
-      .map(({ loan, stats }) => ({
-        id: loan.id,
-        name: loan.name || 'Unnamed',
-        lender: loan.lender,
-        loanType: stats.loanType,
-        interestPaid: stats.interestPaid || 0,
-        monthlyInterest: stats.monthlyInterest || 0,
-        pct: totalInterestPaid > 0 ? ((stats.interestPaid || 0) / totalInterestPaid) * 100 : 0,
-      }))
-      .sort((a, b) => b.interestPaid - a.interestPaid);
+    const emiBreakdown = allStats
+      .filter(({ stats }) => getLoanMonthlyOutflow(stats) > 0 || (stats.interestPaid || 0) > 0)
+      .map(({ loan, stats }) => {
+        const payment = getLoanMonthlyOutflow(stats);
+        const interestPaid = stats.interestPaid || 0;
+        return {
+          id: loan.id,
+          name: loan.name || 'Unnamed',
+          lender: loan.lender,
+          loanType: stats.loanType,
+          isClosed: !!stats.isClosed,
+          payment,
+          scheduledEmi: stats.scheduledEmi || stats.emi,
+          hasManualEmi: stats.hasManualEmi,
+          interest: stats.monthlyInterest || 0,
+          principal: stats.monthlyScheduledPrincipal || 0,
+          extra: stats.monthlyExtraPrincipal || 0,
+          dailyInterest: getDailyInterest(stats.outstanding ?? stats.statementBalance, stats.annualRate),
+          interestPaid,
+          interestPaidPct: totalInterestPaid > 0 ? (interestPaid / totalInterestPaid) * 100 : 0,
+          pct: totalMonthlyEmi > 0 ? (payment / totalMonthlyEmi) * 100 : 0,
+        };
+      })
+      .sort((a, b) => b.payment - a.payment || b.interestPaid - a.interestPaid);
 
     const closingBreakdown = allStats
       .filter(({ stats }) => stats.loanCategory !== 'revolving')
@@ -2588,26 +2631,31 @@ export function LoansTab() {
         loanType: stats.loanType,
         isClosed: stats.isClosed,
         totalEmis: stats.totalEmis,
+        originalEmiPayoffMonths: stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths,
+        afterPrepayPayoffMonths: stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths,
+        pacePayoffMonths: stats.pacePayoffMonths ?? stats.actualPayoffMonths,
+        averageMonthlyPayment: stats.averageMonthlyPayment || stats.monthlyPayment,
         scheduleTimeRemainingMonths: stats.scheduleTimeRemainingMonths,
         actualPayoffMonths: stats.actualPayoffMonths,
         monthsSavedVsSchedule: stats.monthsSavedVsSchedule,
+        monthsSavedVsPace: stats.monthsSavedVsPace ?? 0,
         prepaymentCount: stats.prepaymentCount,
         prepaymentPrincipalPct: stats.prepaymentPrincipalPct,
       }))
       .sort((a, b) => {
         if (a.isClosed && !b.isClosed) return 1;
         if (!a.isClosed && b.isClosed) return -1;
-        return b.actualPayoffMonths - a.actualPayoffMonths;
+        return (b.pacePayoffMonths ?? 0) - (a.pacePayoffMonths ?? 0);
       });
 
     const activeClosing = closingBreakdown.filter((item) => !item.isClosed);
     const lastLoanClosesMonths = activeClosing.length > 0
-      ? Math.max(...activeClosing.map((item) => item.actualPayoffMonths))
+      ? Math.max(...activeClosing.map((item) => item.pacePayoffMonths ?? item.actualPayoffMonths))
       : 0;
     const maxScheduleRemaining = activeClosing.length > 0
-      ? Math.max(...activeClosing.map((item) => item.scheduleTimeRemainingMonths))
+      ? Math.max(...activeClosing.map((item) => item.originalEmiPayoffMonths ?? item.scheduleTimeRemainingMonths))
       : 0;
-    const anyClosingAccel = activeClosing.some((item) => item.monthsSavedVsSchedule > 0);
+    const anyClosingAccel = activeClosing.some((item) => (item.monthsSavedVsPace > 0) || (item.monthsSavedVsSchedule > 0));
 
     const hasExplicitDefault = !!(defaultClosingLoanId && closingBreakdown.some((item) => loanIdsMatch(item.id, defaultClosingLoanId)));
     let featuredClosingLoan = defaultClosingLoanId
@@ -2615,7 +2663,7 @@ export function LoansTab() {
       : null;
     if (!featuredClosingLoan && activeClosing.length > 0) {
       featuredClosingLoan = activeClosing.reduce((best, item) => (
-        item.actualPayoffMonths > best.actualPayoffMonths ? item : best
+        (item.pacePayoffMonths ?? 0) > (best.pacePayoffMonths ?? 0) ? item : best
       ));
     }
 
@@ -2630,7 +2678,6 @@ export function LoansTab() {
       remainingPct,
       repaidPct,
       emiBreakdown,
-      interestBreakdown,
       closingBreakdown,
       lastLoanClosesMonths,
       maxScheduleRemaining,
@@ -2740,7 +2787,7 @@ export function LoansTab() {
         ) : null}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-1.5 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 sm:gap-4">
         <DashboardStatCard
           label="Total Outstanding"
           value={formatIndianCurrency(summary.totalOutstanding)}
@@ -2756,22 +2803,20 @@ export function LoansTab() {
           ) : null}
         />
         <DashboardStatCard
-          label="Monthly EMI Outflow"
+          label="EMI & interest"
           value={formatIndianCurrency(summary.totalMonthlyEmi, false)}
-          sub={showEmiBreakdown
-            ? 'Tap to hide payment split'
-            : `${formatIndianCurrency(summary.totalMonthlyInterest, false)} interest · ${formatIndianCurrency(summary.totalMonthlyPrincipal, false)} principal/mo`}
+          secondaryValue="/ month outflow"
+          sub={showPaymentsBreakdown ? 'Tap to hide loan split' : 'Tap for payment split by loan'}
           color="indigo"
-          onClick={() => { setShowEmiBreakdown((v) => !v); setShowInterestBreakdown(false); setShowClosingBreakdown(false); }}
-          active={showEmiBreakdown}
-        />
-        <DashboardStatCard
-          label="Interest Paid"
-          value={formatIndianCurrency(summary.totalInterestPaid)}
-          sub={showInterestBreakdown ? 'Tap to hide loan split' : 'Tap to see interest by loan'}
-          color="amber"
-          onClick={() => { setShowInterestBreakdown((v) => !v); setShowEmiBreakdown(false); setShowClosingBreakdown(false); }}
-          active={showInterestBreakdown}
+          onClick={() => { setShowPaymentsBreakdown((v) => !v); setShowClosingBreakdown(false); }}
+          active={showPaymentsBreakdown}
+          footer={(
+            <LoanPaymentsDashboardFooter
+              monthlyInterest={summary.totalMonthlyInterest}
+              monthlyPrincipal={summary.totalMonthlyPrincipal}
+              interestPaid={summary.totalInterestPaid}
+            />
+          )}
         />
         <DashboardStatCard
           label="Loan closing"
@@ -2779,39 +2824,30 @@ export function LoansTab() {
             const featured = summary.featuredClosingLoan;
             if (!featured) return 'Paid off';
             if (featured.isClosed) return 'Paid off';
-            return formatDuration(featured.actualPayoffMonths);
-          })()}
-          secondaryValue={(() => {
-            const featured = summary.featuredClosingLoan;
-            if (!featured || featured.isClosed) return null;
-            return `Standard EMI · ${formatDuration(featured.scheduleTimeRemainingMonths)}`;
+            return formatDuration(featured.pacePayoffMonths ?? featured.actualPayoffMonths);
           })()}
           sub={showClosingBreakdown
-            ? 'Tap to hide'
+            ? 'Tap to hide loan split'
             : (() => {
                 const featured = summary.featuredClosingLoan;
                 if (!featured) return 'All EMI loans paid off';
                 if (featured.isClosed) return `${featured.name} · paid off`;
-                const accel = featured.monthsSavedVsSchedule > 0
-                  ? ` · ${formatDuration(featured.monthsSavedVsSchedule)} earlier`
-                  : '';
-                if (summary.hasExplicitDefault) {
-                  return `${featured.name}${accel}`;
-                }
-                return `${featured.name} · longest active loan${accel}`;
+                if (summary.hasExplicitDefault) return `${featured.name} · default`;
+                return `${featured.name} · longest at your pace`;
               })()}
           color="green"
-          onClick={() => { setShowClosingBreakdown((v) => !v); setShowEmiBreakdown(false); setShowInterestBreakdown(false); }}
+          onClick={() => { setShowClosingBreakdown((v) => !v); setShowPaymentsBreakdown(false); }}
           active={showClosingBreakdown}
+          footer={<LoanClosingDashboardFooter featured={summary.featuredClosingLoan} />}
         />
       </div>
 
-      {showEmiBreakdown && (
-        <EmiBreakdownPanel items={summary.emiBreakdown} total={summary.totalMonthlyEmi} />
-      )}
-
-      {showInterestBreakdown && (
-        <InterestBreakdownPanel items={summary.interestBreakdown} total={summary.totalInterestPaid} />
+      {showPaymentsBreakdown && (
+        <EmiBreakdownPanel
+          items={summary.emiBreakdown}
+          total={summary.totalMonthlyEmi}
+          interestPaidTotal={summary.totalInterestPaid}
+        />
       )}
 
       {showClosingBreakdown && (
