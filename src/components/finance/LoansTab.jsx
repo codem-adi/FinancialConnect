@@ -496,6 +496,12 @@ function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosin
     { label: 'EMIs Elapsed', value: `${stats.emisPaid} / ${stats.totalEmis}`, sub: `${stats.remainingEmis} on schedule · auto` },
     { label: 'Principal Paid', value: formatIndianCurrency(stats.principalPaid), accent: 'text-emerald-600' },
     { label: 'Interest Paid', value: formatIndianCurrency(stats.interestPaid), accent: 'text-amber-600' },
+    {
+      label: 'Total Paid',
+      value: formatIndianCurrency(stats.totalCashPaid || (stats.principalPaid || 0) + (stats.interestPaid || 0)),
+      sub: 'EMI + prepayments',
+      accent: 'text-slate-700 dark:text-slate-200',
+    },
     { label: 'Remaining Interest', value: formatIndianCurrency(stats.remainingInterest || 0), accent: 'text-orange-500' },
     {
       label: 'Prepayments',
