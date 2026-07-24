@@ -269,6 +269,49 @@ function emiPeriodWindow(loan, monthIndex) {
   return { periodStart: parseYmd(periodStart), periodEnd: parseYmd(periodEnd) };
 }
 
+/** Sum prepayment amounts whose date falls in a calendar month (1st–last day). */
+function sumPrepaymentsInCalendarMonth(prepayments, year, monthIndex) {
+  return Math.round(
+    prepayments.reduce((sum, pp) => {
+      const d = parseYmd(pp.date);
+      if (Number.isNaN(d.getTime())) return sum;
+      if (d.getFullYear() === year && d.getMonth() === monthIndex) {
+        return sum + toNum(pp.amount);
+      }
+      return sum;
+    }, 0),
+  );
+}
+
+/** Calendar month/year of an EMI due date — used to bucket prepays by when they were made */
+function emiCalendarMonth(loan, monthIndex) {
+  const emiDate = parseYmd(emiDateForMonth(loan, monthIndex));
+  if (Number.isNaN(emiDate.getTime())) return null;
+  return { year: emiDate.getFullYear(), month: emiDate.getMonth() };
+}
+
+const CALENDAR_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatCalendarMonthLabel(year, monthIndex) {
+  return `${CALENDAR_MONTH_SHORT[monthIndex]} ${year}`;
+}
+
+function prepaymentsForCalendarMonth(prepayments, year, monthIndex) {
+  return prepayments
+    .filter((pp) => {
+      const d = parseYmd(pp.date);
+      return !Number.isNaN(d.getTime()) && d.getFullYear() === year && d.getMonth() === monthIndex;
+    })
+    .map((pp) => ({
+      id: pp.id,
+      date: String(pp.date).slice(0, 10),
+      amount: Math.round(toNum(pp.amount)),
+      notes: pp.notes ? String(pp.notes).trim() : '',
+      interestSaved: pp.interestSaved != null ? Math.round(toNum(pp.interestSaved)) : 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function computeInterestForPeriod(principal, annualRate, fromDate, toDate) {
   const p = toNum(principal);
   const rate = toNum(annualRate);
@@ -667,6 +710,10 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const monthlyPrepaymentAmounts = [];
   /** Total cash toward loan per paid EMI month (EMI + prepayments) */
   const monthlyTotalOutflows = [];
+  /** Month-by-month pace breakdown for UI */
+  const monthlyPaceBreakdown = [];
+
+  let totalEmiCash = 0;
 
   for (let month = 0; month < paidEmis; month++) {
     const period = computePeriodInterestWithDisbursements(balance, loan, month, defaultRate, allDisbursements, appliedDisbIds);
@@ -684,12 +731,22 @@ export function simulateAmortization(loan, extraPrepayments = []) {
 
     if (monthResult.status === 'paid') {
       const emiPaid = Math.round(toNum(monthResult.payment));
-      const prepPaid = Math.round(prep.prepaymentTotal);
-      monthlyPrepaymentAmounts.push(prepPaid);
-      // When manual EMI is set, the EMI payment is the full monthly outflow — don't add prepay again
-      const manualForMonth = getManualPaymentForMonth(loan, month);
-      const monthOutflow = manualForMonth != null ? emiPaid : emiPaid + prepPaid;
-      monthlyTotalOutflows.push(monthOutflow);
+      totalEmiCash += emiPaid;
+      const cal = emiCalendarMonth(loan, month);
+      const calendarPrepay = cal
+        ? sumPrepaymentsInCalendarMonth(allPrepayments, cal.year, cal.month)
+        : 0;
+      monthlyPrepaymentAmounts.push(calendarPrepay);
+      monthlyTotalOutflows.push(emiPaid + calendarPrepay);
+      monthlyPaceBreakdown.push({
+        emiNumber: month + 1,
+        emiDueDate: emiDateForMonth(loan, month),
+        calendarMonth: cal ? formatCalendarMonthLabel(cal.year, cal.month) : '',
+        emiPaid,
+        prepaymentTotal: calendarPrepay,
+        totalOutflow: emiPaid + calendarPrepay,
+        prepayments: cal ? prepaymentsForCalendarMonth(allPrepayments, cal.year, cal.month) : [],
+      });
     }
   }
 
@@ -738,9 +795,9 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     : recurringEmi;
 
   const recentPrepayments = monthlyPrepaymentAmounts.slice(-PACE_LOOKBACK);
-  const prepaymentsInWindow = recentPrepayments.filter((amount) => amount > 0);
-  const averageMonthlyPrepayment = prepaymentsInWindow.length > 0
-    ? Math.round(prepaymentsInWindow.reduce((s, a) => s + a, 0) / prepaymentsInWindow.length)
+  // Average prepay per paid EMI month (includes ₹0 months) — aligns with pace − EMI
+  const averageMonthlyPrepayment = recentPrepayments.length > 0
+    ? Math.round(recentPrepayments.reduce((s, a) => s + a, 0) / recentPrepayments.length)
     : 0;
 
   const actualMonthlyEmi = recurringEmi;
@@ -831,7 +888,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     /** Your recurring EMI (recent average or current manual EMI) */
     actualMonthlyEmi,
     averageMonthlyEmi: actualMonthlyEmi,
-    /** Average prepayment in recent months with prepays logged */
+    /** Average prepayment per paid EMI month in lookback (₹0 months included) */
     averageMonthlyPrepayment,
     /** EMI + avg prepayment — total monthly pace */
     paceMonthlyPayment,
@@ -840,6 +897,8 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     pacePayoffTimeRemaining: formatDuration(pacePayoffMonths),
     monthsSavedVsSchedule,
     monthsSavedVsPace,
+    /** Paid EMI months — EMI + calendar-month prepays (drives Your pace) */
+    monthlyPaceBreakdown,
     prepaymentPrincipalPct: disbursedPrincipal > 0
       ? Math.min(100, (prepaymentTotal / disbursedPrincipal) * 100)
       : 0,
@@ -853,7 +912,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     timeRemaining: formatDuration(outstanding <= 0 ? 0 : pacePayoffMonths),
     prepaymentTotal: Math.round(prepaymentTotal),
     prepaymentCount: allPrepayments.length,
-    totalCashPaid: Math.round(monthlyTotalOutflows.reduce((s, a) => s + a, 0)),
+    totalCashPaid: Math.round(totalEmiCash + prepaymentTotal),
     totalInterestSaved: Math.round(totalInterestSaved),
     isClosed: outstanding <= 0 || loan.status === 'closed',
   };
@@ -912,11 +971,13 @@ export function getEmiMonthIndex(loan, date) {
   if (!loan.startDate) return 0;
   const target = parseYmd(date);
   if (Number.isNaN(target.getTime())) return 0;
+  const ty = target.getFullYear();
+  const tm = target.getMonth();
   const tenure = toNum(loan.tenureMonths);
   for (let i = 0; i < tenure; i++) {
     const emiDate = parseYmd(emiDateForMonth(loan, i));
-    const periodStart = i === 0 ? parseYmd(loan.startDate) : parseYmd(emiDateForMonth(loan, i - 1));
-    if (target >= periodStart && target <= emiDate) return i + 1;
+    if (Number.isNaN(emiDate.getTime())) continue;
+    if (emiDate.getFullYear() === ty && emiDate.getMonth() === tm) return i + 1;
   }
   return tenure;
 }
@@ -1109,24 +1170,30 @@ export function formatPayoffAcceleration(months) {
   };
 }
 
-/** Compact pace line for card columns: ₹50k + ₹6.4k prepay */
+/** Shared EMI + pace breakdown — matches paceMonthlyPayment used for closing projection */
+export function getPacePaymentParts(stats) {
+  const emi = Math.round(toNum(
+    stats?.averageMonthlyEmi ?? stats?.actualMonthlyEmi ?? stats?.scheduledEmi ?? stats?.emi ?? stats?.monthlyPayment,
+  ));
+  const paceTotal = Math.round(toNum(stats?.paceMonthlyPayment ?? stats?.averageMonthlyPayment ?? emi));
+  const prepayExtra = Math.max(0, paceTotal - emi);
+  return { emi, prepayExtra, paceTotal };
+}
+
+/** Compact pace line for card columns — EMI + prepay always sums to paceMonthlyPayment */
 export function formatPacePaymentCompact(stats) {
-  const emi = Math.round(toNum(stats?.averageMonthlyEmi ?? stats?.actualMonthlyEmi ?? stats?.scheduledEmi ?? stats?.emi));
-  const pace = Math.round(toNum(stats?.paceMonthlyPayment ?? stats?.averageMonthlyPayment));
-  const prepayExtra = Math.max(0, pace - emi);
+  const { emi, prepayExtra } = getPacePaymentParts(stats);
   if (prepayExtra > 0) {
     return `${formatIndianCurrency(emi, false)} + ${formatIndianCurrency(prepayExtra, false)} prepay`;
   }
   return `${formatIndianCurrency(emi, false)} EMI`;
 }
 
-/** Human label for your-pace payment: EMI + avg prepayment */
+/** Human label for your-pace payment — breakdown matches pace used for closing projection */
 export function formatPacePaymentSummary(stats) {
-  const emi = Math.round(toNum(stats?.averageMonthlyEmi ?? stats?.actualMonthlyEmi ?? stats?.scheduledEmi ?? stats?.emi));
-  const pace = Math.round(toNum(stats?.paceMonthlyPayment ?? stats?.averageMonthlyPayment));
-  const prepayExtra = Math.max(0, pace - emi);
+  const { emi, prepayExtra, paceTotal } = getPacePaymentParts(stats);
   if (prepayExtra > 0) {
-    return `EMI ${formatIndianCurrency(emi, false)} + ${formatIndianCurrency(prepayExtra, false)} avg prepay/mo (${formatIndianCurrency(pace, false)} total)`;
+    return `EMI ${formatIndianCurrency(emi, false)} + ${formatIndianCurrency(prepayExtra, false)} avg prepay/mo (${formatIndianCurrency(paceTotal, false)} total)`;
   }
   return `EMI ${formatIndianCurrency(emi, false)}/mo only`;
 }

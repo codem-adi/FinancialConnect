@@ -28,6 +28,8 @@ export const DEFAULT_UI_STATE = {
     expandedIds: [],
     detailTab: 'details',
     defaultClosingLoanId: null,
+    closingCarouselIndex: null,
+    outflowCarouselIndex: null,
   },
   retirewise: {
     draftPlanById: {},

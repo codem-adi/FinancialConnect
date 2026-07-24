@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus, Trash2, Pencil, X, Banknote, ArrowDownCircle, CreditCard,
-  Clock, TrendingDown, IndianRupee, ChevronDown, ChevronUp, AlertCircle, ScrollText, Star,
-  Copy, Check,
+  Clock, TrendingDown, IndianRupee, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, ScrollText, Star,
+  Copy, Check, Gauge,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useUiSection } from '../../hooks/useUiSection';
@@ -12,7 +12,7 @@ import {
   computeLoanStats, createEmptyLoan, normalizeLoan, LOAN_TYPES, calculateEMI,
   applyPrepayment, updatePrepayment, removePrepayment,
   previewPrepaymentImpact, getPrepaymentSavingsReport,
-  calculateInterestSavedForDate, getPrepayments, formatPayoffAcceleration, formatDuration, formatPacePaymentSummary, formatPacePaymentCompact,
+  calculateInterestSavedForDate, getPrepayments, formatPayoffAcceleration, formatDuration, formatPacePaymentSummary, formatPacePaymentCompact, getPacePaymentParts,
   getEmiPrincipal, getDisbursedPrincipal, EMI_BASIS, getLoanMonthlyOutflow,
   computeMonthlyPaymentBreakdown, buildLoanBankStatement, getMaxPrepaymentAmount,
   getManualEmiPayments, getPaidEmiCount, MAX_TENURE_MONTHS, formatManualEmiPaymentsSummary,
@@ -25,374 +25,582 @@ import {
   previewDisbursementEdit, updateDisbursement, removeDisbursement,
 } from '../../lib/loanCalculations';
 import {
+  getLoanPrincipalTaken,
+  sumPortfolioInterestSaved,
+  validateLoansDashboardSummary,
+} from '../../lib/loansDashboardSummary';
+import {
   buildLoanAudit, buildLoanDeleteAudit, buildPrepaymentAudit,
   buildPartialDisburseAudit, buildDisbursementUpdateAudit, buildDisbursementDeleteAudit,
 } from '../../lib/auditSummaries';
-import { Card, Btn, InputField, Badge, ProgressBar, StatCard, ConfirmDialog, PageHeader } from '../ui';
+import { Card, Btn, InputField, Badge, ProgressBar, ConfirmDialog, PageHeader } from '../ui';
 
 function loanIdsMatch(a, b) {
   return a != null && b != null && String(a) === String(b);
 }
 
-function getLoanPrincipalTaken(stats) {
-  if (stats.loanCategory === 'revolving') {
-    return toNum(stats.creditLimit) || toNum(stats.statementBalance);
-  }
-  return toNum(stats.disbursedPrincipal) || toNum(stats.loanAmount) || 0;
-}
+const DASHBOARD_THEMES = {
+  rose: {
+    accent: 'from-rose-500 to-red-600',
+    border: 'border-rose-200/80 dark:border-rose-900/50',
+    bg: 'bg-rose-50/40 dark:bg-rose-950/15',
+    iconWrap: 'bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400',
+    activeRing: 'ring-rose-500/30 border-rose-400 dark:border-rose-600',
+  },
+  indigo: {
+    accent: 'from-indigo-500 to-violet-600',
+    border: 'border-indigo-200/80 dark:border-indigo-900/50',
+    bg: 'bg-indigo-50/40 dark:bg-indigo-950/15',
+    iconWrap: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400',
+    activeRing: 'ring-indigo-500/30 border-indigo-400 dark:border-indigo-600',
+  },
+  emerald: {
+    accent: 'from-emerald-500 to-teal-600',
+    border: 'border-emerald-200/80 dark:border-emerald-900/50',
+    bg: 'bg-emerald-50/40 dark:bg-emerald-950/15',
+    iconWrap: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400',
+    activeRing: 'ring-emerald-500/30 border-emerald-400 dark:border-emerald-600',
+  },
+};
 
-function DashboardStatCard({ label, value, secondaryValue, sub, color = 'indigo', onClick, active, footer }) {
-  const colors = {
-    indigo: 'from-indigo-500 to-purple-600',
-    green: 'from-emerald-500 to-teal-600',
-    red: 'from-red-500 to-rose-600',
-    amber: 'from-amber-500 to-orange-600',
-    blue: 'from-blue-500 to-cyan-600',
-  };
-  const Tag = onClick ? 'button' : 'div';
+function DashboardMetricTile({ label, value, hint, valueClassName }) {
   return (
-    <Tag
-      type={onClick ? 'button' : undefined}
-      onClick={onClick}
-      className={cn(
-        'bg-white dark:bg-slate-900 rounded-lg sm:rounded-2xl border p-2 sm:p-5 animate-fade-in min-w-0 text-left w-full transition-all',
-        active
-          ? 'border-indigo-400 dark:border-indigo-600 ring-2 ring-indigo-500/30 shadow-md'
-          : 'border-slate-200 dark:border-slate-800',
-        onClick && 'cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-sm',
-      )}
-    >
-      <p className="text-[9px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide truncate">{label}</p>
-      <p className={cn('text-sm sm:text-2xl font-bold mt-0.5 sm:mt-1 bg-gradient-to-r bg-clip-text text-transparent break-words leading-tight', colors[color])}>{value}</p>
-      {secondaryValue && (
-        <p className="text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 mt-0.5 tabular-nums">{secondaryValue}</p>
-      )}
-      {sub && <p className="text-[9px] sm:text-xs text-slate-500 mt-0.5 sm:mt-1 line-clamp-2 sm:line-clamp-3">{sub}</p>}
-      {footer}
-    </Tag>
-  );
-}
-
-function LoanPaymentsDashboardFooter({ monthlyInterest, monthlyPrincipal, interestPaid }) {
-  return (
-    <div className="mt-2 sm:mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-      <div className="grid grid-cols-2 gap-1 sm:gap-2">
-        <div className="min-w-0 text-left">
-          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">This month</p>
-          <p className="text-[10px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
-            Int {formatIndianCurrency(monthlyInterest, false)}
-          </p>
-          <p className="text-[9px] sm:text-[10px] text-slate-500 tabular-nums leading-tight">
-            Prin {formatIndianCurrency(monthlyPrincipal, false)}
-          </p>
-        </div>
-        <div className="min-w-0 text-right">
-          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Interest paid</p>
-          <p className="text-[10px] sm:text-xs font-bold text-amber-600 dark:text-amber-400 tabular-nums leading-tight">
-            {formatIndianCurrency(interestPaid)}
-          </p>
-          <p className="text-[9px] sm:text-[10px] text-slate-500 leading-tight">lifetime</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LoanClosingDashboardFooter({ featured }) {
-  if (!featured || featured.isClosed) return null;
-  const originalLeft = featured.originalEmiPayoffMonths ?? featured.scheduleTimeRemainingMonths ?? 0;
-  const afterPrepayLeft = featured.afterPrepayPayoffMonths ?? featured.actualPayoffMonths ?? 0;
-  const paceLeft = featured.pacePayoffMonths ?? featured.actualPayoffMonths ?? 0;
-  const paceDelta = featured.monthsSavedVsPace ?? 0;
-  const prepaySaved = featured.monthsSavedVsSchedule ?? 0;
-
-  return (
-    <div className="mt-2 sm:mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-      <div className="grid grid-cols-3 gap-1 sm:gap-2">
-        <div className="min-w-0 text-left">
-          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Original EMI</p>
-          <p className="text-[10px] sm:text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums leading-tight">
-            {formatDuration(originalLeft)}
-          </p>
-        </div>
-        <div className="min-w-0 text-center">
-          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">After prepay</p>
-          <p className="text-[10px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
-            {formatDuration(afterPrepayLeft)}
-          </p>
-          <p className="text-[8px] sm:text-[9px] text-indigo-500/80 leading-tight">EMI only</p>
-        </div>
-        <div className="min-w-0 text-right">
-          <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Your pace</p>
-          <p className="text-[10px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
-            {formatDuration(paceLeft)}
-          </p>
-          <p className="text-[8px] sm:text-[9px] text-emerald-600/80 leading-tight">{formatPacePaymentCompact(featured)}</p>
-        </div>
-      </div>
-      <p className="text-[8px] sm:text-[10px] text-slate-500 leading-snug">
-        {paceDelta > 0
-          ? `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(featured)}`
-          : paceDelta < 0
-            ? `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(featured)}`
-            : prepaySaved > 0
-              ? `${formatDuration(prepaySaved)} saved by prepays · ${formatPacePaymentSummary(featured)}`
-              : formatPacePaymentSummary(featured)}
+    <div className="rounded-lg bg-white/70 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 px-2 py-1.5 sm:px-2.5 sm:py-2 min-w-0">
+      <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-400 truncate">{label}</p>
+      <p className={cn('text-[11px] sm:text-xs font-semibold tabular-nums mt-0.5 truncate', valueClassName ?? 'text-slate-700 dark:text-slate-200')}>
+        {value}
       </p>
+      {hint && <p className="text-[9px] text-slate-400 mt-0.5 truncate">{hint}</p>}
     </div>
   );
 }
 
-function LoanStatCell({ label, value, sub, valueClassName, onClick, subClassName }) {
+function getDashboardClosingTileHints(item) {
+  const monthsSavedVsSchedule = Math.max(0, toNum(item.monthsSavedVsSchedule ?? 0));
+  const monthsSavedVsPace = toNum(item.monthsSavedVsPace ?? 0);
+  const paymentSummary = formatPacePaymentSummary(item);
+  const { prepayExtra } = getPacePaymentParts(item);
+
+  const original = 'Original schedule · bank EMI only';
+  const emiOnly = monthsSavedVsSchedule > 0
+    ? `${formatDuration(monthsSavedVsSchedule)} saved by past prepays`
+    : 'Today\'s balance · EMI only forward';
+
+  let pace;
+  if (monthsSavedVsPace > 0) {
+    pace = `${formatDuration(monthsSavedVsPace)} sooner than EMI only · ${paymentSummary}`;
+  } else if (monthsSavedVsPace < 0) {
+    pace = `${formatDuration(Math.abs(monthsSavedVsPace))} longer than EMI only · ${paymentSummary}`;
+  } else if (prepayExtra > 0) {
+    pace = paymentSummary;
+  } else if (monthsSavedVsSchedule > 0) {
+    pace = `${formatDuration(monthsSavedVsSchedule)} saved by past prepays · ${paymentSummary}`;
+  } else {
+    pace = paymentSummary;
+  }
+
+  return { original, emiOnly, pace };
+}
+
+function DashboardClosingTimeline({ item }) {
+  const original = item.originalEmiPayoffMonths ?? item.scheduleTimeRemainingMonths ?? 0;
+  const afterPrepay = item.afterPrepayPayoffMonths ?? item.actualPayoffMonths ?? 0;
+  const pace = item.pacePayoffMonths ?? item.actualPayoffMonths ?? 0;
+  const { emi, prepayExtra, paceTotal } = getPacePaymentParts(item);
+  const hints = getDashboardClosingTileHints(item);
+
+  const topTiles = [
+    { label: 'Original', months: original, description: hints.original, tone: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200/80 dark:border-slate-700' },
+    { label: 'EMI only', months: afterPrepay, description: hints.emiOnly, tone: 'text-indigo-500 dark:text-indigo-400', border: 'border-indigo-200/80 dark:border-indigo-800/60' },
+  ];
+
+  return (
+    <div className="flex flex-col flex-1 h-full gap-1 min-h-0">
+      <div className="grid grid-cols-2 gap-1 shrink-0">
+        {topTiles.map((tile) => (
+          <div
+            key={tile.label}
+            className={cn(
+              'rounded-lg bg-white/70 dark:bg-slate-900/50 border text-center px-1.5 py-1.5 min-w-0 flex flex-col',
+              tile.border,
+            )}
+          >
+            <p className="text-[8px] sm:text-[9px] uppercase tracking-wide text-slate-500 leading-tight">{tile.label}</p>
+            <p className={cn('text-[11px] sm:text-xs font-bold tabular-nums mt-1', tile.tone)}>
+              {formatDuration(Math.max(0, Math.round(toNum(tile.months))))}
+            </p>
+            <p className="text-[8px] sm:text-[9px] text-slate-500 leading-snug mt-1.5 flex-1">
+              {tile.description}
+            </p>
+          </div>
+        ))}
+      </div>
+      <div className="flex-1 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-emerald-200/80 dark:border-emerald-800/60 px-2 py-1.5 sm:py-2 min-h-[3.25rem] flex flex-col justify-between">
+        <div className="flex items-center justify-between gap-2 min-w-0 w-full">
+          <div className="min-w-0">
+            <p className="text-[8px] sm:text-[9px] uppercase tracking-wide text-slate-500">Your pace</p>
+            <p className="text-sm sm:text-base font-bold tabular-nums text-emerald-500 dark:text-emerald-400 mt-0.5">
+              {formatDuration(Math.max(0, Math.round(toNum(pace))))}
+            </p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-[9px] sm:text-[10px] text-slate-500 leading-tight">Pace payment</p>
+            <p className="text-[10px] sm:text-[11px] font-semibold tabular-nums text-slate-700 dark:text-slate-200 mt-0.5">
+              EMI {formatIndianCurrency(emi, false)}
+            </p>
+            {prepayExtra > 0 ? (
+              <p className="text-[10px] sm:text-[11px] font-semibold tabular-nums text-teal-600 dark:text-teal-400 leading-tight">
+                + {formatIndianCurrency(prepayExtra, false)}/mo avg prepay
+              </p>
+            ) : (
+              <p className="text-[10px] sm:text-[11px] text-slate-500 leading-tight">EMI only pace</p>
+            )}
+            {paceTotal > emi && (
+              <p className="text-[9px] sm:text-[10px] text-slate-500 tabular-nums mt-0.5">
+                {formatIndianCurrency(paceTotal, false)}/mo total
+              </p>
+            )}
+          </div>
+        </div>
+        <p className="text-[8px] sm:text-[9px] text-slate-500 leading-snug mt-2 pt-1.5 border-t border-emerald-200/60 dark:border-emerald-800/50">
+          {hints.pace}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ClosingTimelinePills({ original, afterPrepay, pace, paceSummary, compact = false }) {
+  const items = [
+    { label: 'Original', months: original, tone: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200/80 dark:border-slate-700' },
+    { label: 'EMI only', months: afterPrepay, tone: 'text-indigo-500 dark:text-indigo-400', border: 'border-indigo-200/80 dark:border-indigo-800/60' },
+    { label: 'Your pace', months: pace, tone: 'text-emerald-500 dark:text-emerald-400', border: 'border-emerald-200/80 dark:border-emerald-800/60' },
+  ];
+
+  const renderDuration = (months, tone) => {
+    const n = Math.max(0, Math.round(toNum(months)));
+    const years = Math.floor(n / 12);
+    const rem = n % 12;
+    if (compact) {
+      return (
+        <div className={cn('mt-1 tabular-nums leading-tight', tone)}>
+          <p className="text-[11px] sm:text-xs font-bold">{years} yr</p>
+          <p className="text-[11px] sm:text-xs font-bold">{rem} mo</p>
+        </div>
+      );
+    }
+    return (
+      <p className={cn('text-sm sm:text-base font-bold tabular-nums mt-1', tone)}>
+        {formatDuration(n)}
+      </p>
+    );
+  };
+
+  return (
+    <div>
+      <div className={cn('grid grid-cols-3', compact ? 'gap-1' : 'gap-1.5 sm:gap-2')}>
+        {items.map((item) => (
+          <div
+            key={item.label}
+            className={cn(
+              'rounded-lg bg-white/70 dark:bg-slate-900/50 border text-center min-w-0 overflow-hidden',
+              compact ? 'px-1 py-1.5' : 'px-1.5 py-2 sm:px-2 sm:py-2.5',
+              item.border,
+            )}
+          >
+            <p className="text-[8px] sm:text-[9px] uppercase tracking-wide text-slate-500 leading-tight px-0.5">{item.label}</p>
+            {renderDuration(item.months, item.tone)}
+          </div>
+        ))}
+      </div>
+      {paceSummary && !compact && (
+        <p className="text-[10px] sm:text-xs text-slate-500 mt-2 leading-snug">{paceSummary}</p>
+      )}
+    </div>
+  );
+}
+
+const OUTFLOW_COMBINED_ID = '__combined__';
+
+function DashboardOutflowSlide({ item }) {
+  const dailyHint = item.dailyInterest > 0
+    ? `${formatIndianCurrency(item.dailyInterest, false)}/day`
+    : undefined;
+
+  if (item.isCombined) {
+    return (
+      <div className="grid grid-cols-2 gap-1.5 sm:gap-2 flex-1 h-full content-start">
+        <DashboardMetricTile label="Interest / mo" value={formatIndianCurrency(item.interest, false)} hint={dailyHint} valueClassName="text-amber-600 dark:text-amber-400" />
+        <DashboardMetricTile label="Principal / mo" value={formatIndianCurrency(item.principal, false)} valueClassName="text-emerald-600 dark:text-emerald-400" />
+        <DashboardMetricTile label="Interest paid" value={formatIndianCurrency(item.interestPaid)} hint="lifetime" valueClassName="text-orange-600 dark:text-orange-400" />
+        <DashboardMetricTile label="Prepayments" value={formatIndianCurrency(item.prepaymentTotal)} hint="total principal reduced" valueClassName="text-teal-600 dark:text-teal-400" />
+      </div>
+    );
+  }
+
+  const prepayHint = item.prepaymentCount > 0
+    ? `${item.prepaymentCount} payment${item.prepaymentCount === 1 ? '' : 's'}`
+    : 'No prepayments';
+
+  return (
+    <div className="grid grid-cols-2 gap-1.5 sm:gap-2 flex-1 h-full content-start">
+      <DashboardMetricTile label="Interest / mo" value={formatIndianCurrency(item.interest, false)} hint={dailyHint} valueClassName="text-amber-600 dark:text-amber-400" />
+      <DashboardMetricTile
+        label="Principal / mo"
+        value={formatIndianCurrency(item.principal, false)}
+        hint={item.extra > 0 ? `+${formatIndianCurrency(item.extra, false)} extra` : undefined}
+        valueClassName="text-emerald-600 dark:text-emerald-400"
+      />
+      <DashboardMetricTile
+        label="Prepayments"
+        value={item.prepaymentTotal > 0 ? formatIndianCurrency(item.prepaymentTotal) : '—'}
+        hint={prepayHint}
+        valueClassName="text-teal-600 dark:text-teal-400"
+      />
+      <DashboardMetricTile
+        label="Interest paid"
+        value={item.interestPaid > 0 ? formatIndianCurrency(item.interestPaid) : '—'}
+        hint={item.interestPaidPct > 0 ? `${formatPercent(item.interestPaidPct, 0)} of total` : undefined}
+        valueClassName="text-orange-600 dark:text-orange-400"
+      />
+    </div>
+  );
+}
+
+function DashboardMonthlyOutflowCard({
+  items,
+  carouselIndex,
+  onCarouselIndexChange,
+}) {
+  const touchStartX = useRef(null);
+  const t = DASHBOARD_THEMES.indigo;
+  const count = items.length;
+  const safeIndex = count > 0 ? Math.min(Math.max(0, carouselIndex), count - 1) : 0;
+  const current = count > 0 ? items[safeIndex] : null;
+
+  const goPrev = useCallback(() => {
+    if (count <= 1) return;
+    onCarouselIndexChange(safeIndex <= 0 ? count - 1 : safeIndex - 1);
+  }, [count, onCarouselIndexChange, safeIndex]);
+
+  const goNext = useCallback(() => {
+    if (count <= 1) return;
+    onCarouselIndexChange(safeIndex >= count - 1 ? 0 : safeIndex + 1);
+  }, [count, onCarouselIndexChange, safeIndex]);
+
+  const onTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const onTouchEnd = (e) => {
+    if (touchStartX.current == null || count <= 1) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(delta) > 48) {
+      if (delta > 0) goPrev();
+      else goNext();
+    }
+    touchStartX.current = null;
+  };
+
+  const primaryValue = current
+    ? `${formatIndianCurrency(current.payment, false)}/mo`
+    : '—';
+
+  const hint = !current
+    ? 'No active monthly payments'
+    : current.isCombined
+      ? `${current.activeLoanCount} active loan${current.activeLoanCount === 1 ? '' : 's'} · combined EMI`
+      : current.lender
+        ? `${current.name} · ${current.lender}`
+        : current.name;
+
+  const navBtnClass = 'p-1 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-white/80 dark:hover:bg-indigo-950/30 transition-colors disabled:opacity-25 disabled:pointer-events-none';
+
+  return (
+    <div className={cn('relative overflow-hidden rounded-xl sm:rounded-2xl border text-left w-full h-full flex flex-col animate-fade-in', t.border, t.bg)}>
+      <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r', t.accent)} />
+      <div className="p-3 sm:p-4 pt-4 flex flex-col flex-1 min-h-0 space-y-2">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <div className={cn('shrink-0 w-9 h-9 rounded-xl flex items-center justify-center', t.iconWrap)}>
+            <Banknote className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <p className="text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide">Monthly outflow</p>
+            <p className={cn('text-lg sm:text-2xl font-bold mt-0.5 tabular-nums bg-gradient-to-r bg-clip-text text-transparent leading-tight truncate', t.accent)}>
+              {primaryValue}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 truncate">{hint}</p>
+            {current && !current.isCombined && current.pct > 0 && (
+              <p className="text-[10px] text-indigo-500 dark:text-indigo-400 mt-0.5 truncate">
+                {formatPercent(current.pct, 1)} of total outflow
+              </p>
+            )}
+          </div>
+        </div>
+
+        {count === 0 ? (
+          <p className="text-xs text-slate-500">No active monthly payments.</p>
+        ) : (
+          <div
+            className="flex flex-col flex-1 min-h-0 touch-pan-y select-none"
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
+          >
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <div
+                className="flex h-full transition-transform duration-300 ease-out"
+                style={{ transform: `translateX(-${safeIndex * 100}%)` }}
+              >
+                {items.map((item) => (
+                  <div key={item.id} className="w-full shrink-0 h-full flex flex-col min-h-0 px-0.5">
+                    <DashboardOutflowSlide item={item} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {count > 1 && (
+              <div className="flex items-center justify-center gap-2 pt-1 shrink-0">
+                <button type="button" onClick={goPrev} className={navBtnClass} aria-label="Previous outflow view">
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-1">
+                  {items.map((item, i) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => onCarouselIndexChange(i)}
+                      className={cn(
+                        'rounded-full transition-all',
+                        i === safeIndex
+                          ? 'w-1.5 h-1.5 bg-indigo-500'
+                          : 'w-1 h-1 bg-slate-400/60 hover:bg-slate-400',
+                      )}
+                      aria-label={item.isCombined ? 'Show combined outflow' : `Show ${item.name}`}
+                      aria-current={i === safeIndex}
+                    />
+                  ))}
+                </div>
+                <button type="button" onClick={goNext} className={navBtnClass} aria-label="Next outflow view">
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DashboardLoanClosingCard({
+  items,
+  carouselIndex,
+  onCarouselIndexChange,
+  defaultLoanId,
+  onSetDefault,
+}) {
+  const touchStartX = useRef(null);
+  const t = DASHBOARD_THEMES.emerald;
+  const count = items.length;
+  const safeIndex = count > 0 ? Math.min(Math.max(0, carouselIndex), count - 1) : 0;
+  const current = count > 0 ? items[safeIndex] : null;
+  const isDefault = current && loanIdsMatch(defaultLoanId, current.id);
+
+  const goPrev = useCallback(() => {
+    if (count <= 1) return;
+    onCarouselIndexChange(safeIndex <= 0 ? count - 1 : safeIndex - 1);
+  }, [count, onCarouselIndexChange, safeIndex]);
+
+  const goNext = useCallback(() => {
+    if (count <= 1) return;
+    onCarouselIndexChange(safeIndex >= count - 1 ? 0 : safeIndex + 1);
+  }, [count, onCarouselIndexChange, safeIndex]);
+
+  const onTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const onTouchEnd = (e) => {
+    if (touchStartX.current == null || count <= 1) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(delta) > 48) {
+      if (delta > 0) goPrev();
+      else goNext();
+    }
+    touchStartX.current = null;
+  };
+
+  const primaryValue = !current || current.isClosed
+    ? 'Paid off'
+    : formatDuration(current.pacePayoffMonths ?? current.actualPayoffMonths);
+
+  const hint = !current
+    ? 'No EMI loans'
+    : current.isClosed
+      ? `${current.name} · paid off`
+      : current.lender
+        ? `${current.name} · ${current.lender}`
+        : current.name;
+
+  const navBtnClass = 'p-1 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-white/80 dark:hover:bg-emerald-950/30 transition-colors disabled:opacity-25 disabled:pointer-events-none';
+
+  return (
+    <div className={cn('relative overflow-hidden rounded-xl sm:rounded-2xl border text-left w-full h-full flex flex-col animate-fade-in', t.border, t.bg)}>
+      <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r', t.accent)} />
+      <div className="p-3 sm:p-4 pt-4 flex flex-col flex-1 min-h-0 space-y-2">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <div className={cn('shrink-0 w-9 h-9 rounded-xl flex items-center justify-center', t.iconWrap)}>
+            <Clock className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-1.5 min-w-0">
+              <p className="text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide">Loan closing</p>
+              {current && onSetDefault && (
+                isDefault ? (
+                  <span className="inline-flex items-center gap-0.5 shrink-0 whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-medium">
+                    <Star className="w-2.5 h-2.5 fill-current shrink-0" aria-hidden />
+                    Default
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSetDefault(current.id);
+                    }}
+                    className="inline-flex items-center gap-0.5 shrink-0 whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+                  >
+                    <Star className="w-2.5 h-2.5 shrink-0" aria-hidden />
+                    Default
+                  </button>
+                )
+              )}
+            </div>
+            <p className={cn('text-lg sm:text-2xl font-bold mt-0.5 tabular-nums bg-gradient-to-r bg-clip-text text-transparent leading-tight truncate', t.accent)}>
+              {primaryValue}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 truncate">{hint}</p>
+          </div>
+        </div>
+
+        {count === 0 ? (
+          <p className="text-xs text-slate-500">No EMI loans to show.</p>
+        ) : (
+          <div
+            className="flex flex-col flex-1 min-h-0 touch-pan-y select-none"
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
+          >
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <div
+                className="flex h-full transition-transform duration-300 ease-out"
+                style={{ transform: `translateX(-${safeIndex * 100}%)` }}
+              >
+                {items.map((item) => (
+                  <div key={item.id} className="w-full shrink-0 h-full flex flex-col min-h-0">
+                    {item.isClosed ? (
+                      <p className="text-[11px] text-slate-500 text-center py-1 flex-1 flex items-center justify-center">
+                        Paid off · {formatDuration(item.totalEmis)}
+                      </p>
+                    ) : (
+                      <DashboardClosingTimeline item={item} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {count > 1 && (
+              <div className="flex items-center justify-center gap-2 pt-1 shrink-0">
+                <button type="button" onClick={goPrev} className={navBtnClass} aria-label="Previous loan">
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-1">
+                  {items.map((item, i) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => onCarouselIndexChange(i)}
+                      className={cn(
+                        'rounded-full transition-all',
+                        i === safeIndex
+                          ? 'w-1.5 h-1.5 bg-emerald-500'
+                          : 'w-1 h-1 bg-slate-400/60 hover:bg-slate-400',
+                      )}
+                      aria-label={`Show ${item.name}`}
+                      aria-current={i === safeIndex}
+                    />
+                  ))}
+                </div>
+                <button type="button" onClick={goNext} className={navBtnClass} aria-label="Next loan">
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DashboardHeroCard({
+  theme = 'indigo',
+  icon: Icon,
+  label,
+  value,
+  hint,
+  onClick,
+  active,
+  children,
+}) {
+  const t = DASHBOARD_THEMES[theme] || DASHBOARD_THEMES.indigo;
   const Tag = onClick ? 'button' : 'div';
   return (
     <Tag
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       className={cn(
-        'p-2 sm:p-3 text-center min-w-0',
-        onClick && 'cursor-pointer hover:bg-white/60 dark:hover:bg-slate-800/40 transition-colors',
+        'relative overflow-hidden rounded-xl sm:rounded-2xl border text-left w-full h-full flex flex-col transition-all animate-fade-in',
+        t.border,
+        t.bg,
+        active && `ring-2 shadow-md ${t.activeRing}`,
+        onClick && 'cursor-pointer hover:shadow-sm',
       )}
     >
-      <p className="text-[9px] sm:text-[10px] uppercase text-slate-500 truncate">{label}</p>
-      <p className={cn('text-xs sm:text-lg font-bold leading-tight mt-0.5 break-words', valueClassName)}>{value}</p>
-      {sub && (
-        <p className={cn('text-[9px] sm:text-[10px] text-slate-500 mt-0.5 leading-snug', subClassName ?? 'truncate')}>
-          {sub}
-        </p>
-      )}
+      <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r', t.accent)} />
+      <div className="p-3 sm:p-5 pt-4 sm:pt-6 flex flex-col flex-1 min-h-0 space-y-3">
+        <div className="flex items-start gap-3">
+          {Icon && (
+            <div className={cn('shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center', t.iconWrap)}>
+              <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+            <p className={cn('text-xl sm:text-3xl font-bold mt-0.5 tabular-nums bg-gradient-to-r bg-clip-text text-transparent leading-tight', t.accent)}>
+              {value}
+            </p>
+            {hint && <p className="text-[10px] sm:text-xs text-slate-500 mt-1 leading-snug">{hint}</p>}
+          </div>
+          {onClick && (
+            <ChevronDown className={cn('w-4 h-4 shrink-0 text-slate-400 transition-transform mt-1', active && 'rotate-180')} />
+          )}
+        </div>
+        {children}
+      </div>
     </Tag>
   );
 }
 
-function useIsSmUp() {
-  const [matches, setMatches] = useState(() => (
-    typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)').matches : true
-  ));
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 640px)');
-    const onChange = () => setMatches(mq.matches);
-    onChange();
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return matches;
-}
-
-function EmiBreakdownPanel({ items, total, interestPaidTotal = 0 }) {
-  if (items.length === 0) {
-    return (
-      <Card className="!p-4 border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20">
-        <p className="text-sm text-slate-500 text-center">No active monthly payments</p>
-      </Card>
-    );
-  }
-  const totals = items.reduce((acc, item) => ({
-    interest: acc.interest + item.interest,
-    principal: acc.principal + item.principal,
-    extra: acc.extra + item.extra,
-    dailyInterest: acc.dailyInterest + (item.dailyInterest || 0),
-    interestPaid: acc.interestPaid + (item.interestPaid || 0),
-  }), { interest: 0, principal: 0, extra: 0, dailyInterest: 0, interestPaid: 0 });
-  const lifetimeInterest = interestPaidTotal || totals.interestPaid;
-
+function LoanMetricBlock({ label, value, sub, valueClassName, className }) {
   return (
-    <Card className="!p-0 overflow-hidden border-indigo-200 dark:border-indigo-800 animate-fade-in">
-      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100 dark:border-slate-800 bg-indigo-50/80 dark:bg-indigo-950/30">
-        <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Monthly payment split by loan</p>
-        <p className="text-xs text-slate-500 mt-0.5">
-          {formatIndianCurrency(total, false)}/mo total · {formatIndianCurrency(totals.interest, false)} interest · {formatIndianCurrency(totals.principal, false)} principal
-          {totals.extra > 0 && ` · +${formatIndianCurrency(totals.extra, false)} extra`}
-          {totals.dailyInterest > 0 && ` · ${formatIndianCurrency(totals.dailyInterest, false)}/day`}
-          {lifetimeInterest > 0 && ` · ${formatIndianCurrency(lifetimeInterest)} interest paid`}
-        </p>
-      </div>
-      <div className="divide-y divide-slate-100 dark:divide-slate-800">
-        {items.map((item) => {
-          const typeInfo = LOAN_TYPES[item.loanType] || LOAN_TYPES.other;
-          return (
-            <div key={item.id} className="px-3 sm:px-4 py-2.5 sm:py-3">
-              <div className="flex items-start gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm truncate">{item.name}</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>
-                      {typeInfo.label}
-                    </span>
-                    {item.hasManualEmi && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-medium">
-                        Manual
-                      </span>
-                    )}
-                    {item.isClosed && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium">
-                        Closed
-                      </span>
-                    )}
-                  </div>
-                  {item.lender && <p className="text-xs text-slate-500 truncate">{item.lender}</p>}
-                  {item.hasManualEmi && item.scheduledEmi !== item.payment && item.payment > 0 && (
-                    <p className="text-[10px] text-slate-500 mt-0.5">Bank EMI {formatIndianCurrency(item.scheduledEmi, false)}</p>
-                  )}
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="font-bold text-indigo-600 dark:text-indigo-400">
-                    {item.payment > 0 ? formatIndianCurrency(item.payment, false) : '—'}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {item.payment > 0 ? `${formatPercent(item.pct, 1)} of outflow` : 'no EMI'}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] sm:text-xs">
-                <div className="rounded-lg bg-rose-50 dark:bg-rose-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">Daily interest</p>
-                  <p className="font-semibold text-rose-700 dark:text-rose-400">
-                    {item.dailyInterest > 0 ? `${formatIndianCurrency(item.dailyInterest, false)}/day` : '—'}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">Interest /mo</p>
-                  <p className="font-semibold text-amber-700 dark:text-amber-400">{formatIndianCurrency(item.interest, false)}</p>
-                </div>
-                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">Principal</p>
-                  <p className="font-semibold text-emerald-700 dark:text-emerald-400">{formatIndianCurrency(item.principal, false)}</p>
-                  <p className={`text-[9px] mt-0.5 font-medium ${item.extra > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>
-                    Extra {item.extra > 0 ? `+${formatIndianCurrency(item.extra, false)}` : '—'}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-orange-50 dark:bg-orange-900/20 px-2 py-1.5 text-center">
-                  <p className="text-slate-500">Interest paid</p>
-                  <p className="font-semibold text-orange-700 dark:text-orange-400">
-                    {item.interestPaid > 0 ? formatIndianCurrency(item.interestPaid) : '—'}
-                  </p>
-                  {item.interestPaidPct > 0 && (
-                    <p className="text-[9px] text-slate-400 mt-0.5">{formatPercent(item.interestPaidPct, 0)} of total</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
-  const [pendingDefault, setPendingDefault] = useState(null);
-
-  if (items.length === 0) {
-    return (
-      <Card className="!p-4 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-        <p className="text-sm text-slate-500 text-center">No EMI loans to show closing timeline</p>
-      </Card>
-    );
-  }
-  const active = items.filter((item) => !item.isClosed);
-  return (
-    <Card className="!p-0 overflow-hidden border-emerald-200 dark:border-emerald-800 animate-fade-in">
-      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100 dark:border-slate-800 bg-emerald-50/80 dark:bg-emerald-950/30">
-        <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">Loan closing by loan</p>
-        <p className="text-xs text-slate-500 mt-0.5">
-          {active.length > 0
-            ? `${active.length} active · mark a loan as default for the top card`
-            : 'All EMI loans paid off'}
-        </p>
-      </div>
-      <div className="divide-y divide-slate-100 dark:divide-slate-800">
-        {items.map((item) => {
-          const typeInfo = LOAN_TYPES[item.loanType] || LOAN_TYPES.other;
-          const closed = item.isClosed;
-          const isDefault = loanIdsMatch(defaultLoanId, item.id);
-          return (
-            <div key={item.id} className={cn('px-3 sm:px-4 py-2.5 sm:py-3', isDefault && 'bg-emerald-50/60 dark:bg-emerald-950/20')}>
-              <div className="flex items-start gap-2 sm:gap-3 mb-2 min-w-0">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm truncate">{item.name}</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>
-                      {typeInfo.label}
-                    </span>
-                    {isDefault && (
-                      <span className="inline-flex flex-nowrap items-center gap-0.5 whitespace-nowrap shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-medium leading-none">
-                        <Star className="w-3 h-3 fill-current shrink-0" aria-hidden />
-                        <span>Default</span>
-                      </span>
-                    )}
-                    {closed && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-medium">
-                        Paid off
-                      </span>
-                    )}
-                  </div>
-                  {item.lender && <p className="text-xs text-slate-500 truncate">{item.lender}</p>}
-                </div>
-                {!isDefault && (
-                  <Btn
-                    size="sm"
-                    variant="ghost"
-                    className="shrink-0 !inline-flex !flex-nowrap items-center gap-0.5 !px-1.5 sm:!px-2 text-[10px] sm:text-xs leading-none"
-                    onClick={() => setPendingDefault(item)}
-                  >
-                    <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden />
-                    <span className="whitespace-nowrap hidden sm:inline">Set default</span>
-                    <span className="whitespace-nowrap sm:hidden">Default</span>
-                  </Btn>
-                )}
-              </div>
-              {closed ? (
-                <p className="text-xs text-slate-500">
-                  Original tenure {formatDuration(item.totalEmis)}
-                </p>
-              ) : (
-                <div className="grid grid-cols-3 gap-2 text-[10px] sm:text-xs">
-                  <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">Original EMI</p>
-                    <p className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums">{formatDuration(item.originalEmiPayoffMonths ?? item.scheduleTimeRemainingMonths)}</p>
-                  </div>
-                  <div className="rounded-lg bg-indigo-50 dark:bg-indigo-900/20 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">After prepay</p>
-                    <p className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">{formatDuration(item.afterPrepayPayoffMonths ?? item.actualPayoffMonths)}</p>
-                  </div>
-                  <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-center">
-                    <p className="text-slate-500">Your pace</p>
-                    <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatDuration(item.pacePayoffMonths ?? item.actualPayoffMonths)}</p>
-                    <p className="text-[9px] text-emerald-600/80">{formatPacePaymentCompact(item)}</p>
-                  </div>
-                </div>
-              )}
-              {!closed && (item.monthsSavedVsPace > 0 || item.monthsSavedVsSchedule > 0) && (
-                <p className="text-[10px] text-teal-700 dark:text-teal-400 mt-2 text-right">
-                  {item.monthsSavedVsPace > 0
-                    ? `${formatDuration(item.monthsSavedVsPace)} sooner · ${formatPacePaymentSummary(item)}`
-                    : `${formatDuration(item.monthsSavedVsSchedule)} earlier from prepays`}
-                </p>
-              )}
-              {!closed && !(item.monthsSavedVsPace > 0) && !(item.monthsSavedVsSchedule > 0) && (
-                <p className="text-[10px] text-slate-500 mt-2 text-right">
-                  {item.monthsSavedVsPace < 0
-                    ? `${formatDuration(Math.abs(item.monthsSavedVsPace))} longer · ${formatPacePaymentSummary(item)}`
-                    : formatPacePaymentSummary(item)}
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <ConfirmDialog
-        open={!!pendingDefault}
-        message={`set "${pendingDefault?.name || 'this loan'}" as the default for Loan closing`}
-        detail="The top Loan closing card will show this loan's closing timeline."
-        confirmLabel="Set as default"
-        onConfirm={() => {
-          onSetDefault(pendingDefault.id);
-          setPendingDefault(null);
-        }}
-        onCancel={() => setPendingDefault(null)}
-      />
-    </Card>
+    <div className={cn('px-3 py-2.5 sm:py-3 min-w-0', className)}>
+      <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={cn('text-sm sm:text-lg font-bold tabular-nums mt-0.5 leading-tight', valueClassName)}>{value}</p>
+      {sub && <p className="text-[10px] sm:text-xs text-slate-500 mt-1 leading-snug">{sub}</p>}
+    </div>
   );
 }
 
@@ -489,6 +697,220 @@ function CompactMetricTable({ rows, className }) {
   );
 }
 
+function LoanMonthlyPaceTable({ stats, fullPage = false }) {
+  const [expandedEmi, setExpandedEmi] = useState(null);
+  const rows = stats?.monthlyPaceBreakdown ?? [];
+  if (!rows.length) return null;
+
+  const togglePrepayDetails = (emiNumber) => {
+    setExpandedEmi((prev) => (prev === emiNumber ? null : emiNumber));
+  };
+
+  const totals = rows.reduce(
+    (acc, row) => ({
+      emiPaid: acc.emiPaid + (row.emiPaid || 0),
+      prepaymentTotal: acc.prepaymentTotal + (row.prepaymentTotal || 0),
+      totalOutflow: acc.totalOutflow + (row.totalOutflow || 0),
+    }),
+    { emiPaid: 0, prepaymentTotal: 0, totalOutflow: 0 },
+  );
+
+  const wrapperClass = fullPage
+    ? 'rounded-xl border border-emerald-200/70 dark:border-emerald-800/50 bg-white dark:bg-slate-900/50 overflow-hidden shadow-sm'
+    : 'rounded-lg border border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-900/40 overflow-hidden animate-fade-in';
+
+  return (
+    <div className={wrapperClass}>
+      <div className={cn(
+        'px-3 sm:px-4 py-3 border-b',
+        fullPage
+          ? 'border-emerald-100 dark:border-emerald-900/40 bg-emerald-50/60 dark:bg-emerald-950/20'
+          : 'border-slate-100 dark:border-slate-800',
+      )}
+      >
+        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Monthly payment pace</p>
+        <p className="text-xs text-slate-500 mt-1 leading-snug">
+          Prepayments grouped by calendar month (1st–last day) · drives Your pace closing
+        </p>
+        {!stats.isClosed && (
+          <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mt-2">
+            {formatPacePaymentSummary(stats)} · closes in {formatDuration(stats.pacePayoffMonths ?? stats.actualPayoffMonths)}
+          </p>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs sm:text-sm min-w-[560px]">
+          <thead>
+            <tr className="bg-slate-50/80 dark:bg-slate-800/50 text-left">
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500">EMI</th>
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500">Month</th>
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500">Due</th>
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500 text-right">EMI paid</th>
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500 text-right">Prepay</th>
+              <th className="px-2.5 sm:px-3 py-2 font-medium text-slate-500 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const hasPrepayDetails = row.prepaymentTotal > 0 && row.prepayments?.length > 0;
+              const isExpanded = expandedEmi === row.emiNumber;
+              return (
+                <Fragment key={row.emiNumber}>
+                  <tr
+                    className={cn(
+                      'border-t border-slate-100 dark:border-slate-800 align-top',
+                      hasPrepayDetails && 'cursor-pointer hover:bg-slate-50/80 dark:hover:bg-slate-800/30',
+                      isExpanded && 'bg-slate-50/60 dark:bg-slate-800/25',
+                    )}
+                    onClick={hasPrepayDetails ? () => togglePrepayDetails(row.emiNumber) : undefined}
+                  >
+                    <td className="px-2.5 sm:px-3 py-2 font-medium text-slate-600 dark:text-slate-300 tabular-nums">
+                      {row.emiNumber}
+                    </td>
+                    <td className="px-2.5 sm:px-3 py-2 text-slate-700 dark:text-slate-200">{row.calendarMonth}</td>
+                    <td className="px-2.5 sm:px-3 py-2 text-slate-500 tabular-nums whitespace-nowrap">{row.emiDueDate}</td>
+                    <td className="px-2.5 sm:px-3 py-2 text-right tabular-nums">{formatIndianCurrency(row.emiPaid, false)}</td>
+                    <td className="px-2.5 sm:px-3 py-2 text-right tabular-nums text-teal-700 dark:text-teal-400">
+                      {row.prepaymentTotal > 0 ? (
+                        <button
+                          type="button"
+                          className={cn(
+                            'inline-flex items-center justify-end gap-1 ml-auto max-w-full',
+                            hasPrepayDetails && 'hover:text-teal-800 dark:hover:text-teal-300',
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePrepayDetails(row.emiNumber);
+                          }}
+                          aria-expanded={isExpanded}
+                          aria-label={isExpanded ? 'Hide prepayment details' : 'Show prepayment details'}
+                        >
+                          <span>{formatIndianCurrency(row.prepaymentTotal, false)}</span>
+                          {hasPrepayDetails && (
+                            isExpanded
+                              ? <ChevronUp className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                              : <ChevronDown className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                          )}
+                        </button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="px-2.5 sm:px-3 py-2 text-right font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                      {formatIndianCurrency(row.totalOutflow, false)}
+                    </td>
+                  </tr>
+                  {isExpanded && hasPrepayDetails && (
+                    <tr className="border-t border-slate-100 dark:border-slate-800 bg-teal-50/40 dark:bg-teal-950/15">
+                      <td colSpan={6} className="px-2.5 sm:px-4 py-2.5">
+                        <div className="rounded-lg border border-teal-200/70 dark:border-teal-800/50 bg-white/80 dark:bg-slate-900/60 overflow-hidden">
+                          <p className="px-3 py-1.5 text-[10px] sm:text-xs font-medium text-teal-800 dark:text-teal-300 border-b border-teal-100 dark:border-teal-900/40 bg-teal-50/80 dark:bg-teal-950/30">
+                            {row.prepayments.length} prepayment{row.prepayments.length === 1 ? '' : 's'} in {row.calendarMonth}
+                          </p>
+                          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {row.prepayments.map((p) => (
+                              <div key={p.id || `${p.date}-${p.amount}`} className="flex items-start justify-between gap-3 px-3 py-2">
+                                <div className="min-w-0">
+                                  <p className="text-xs sm:text-sm font-semibold tabular-nums text-teal-700 dark:text-teal-300">
+                                    {formatIndianCurrency(p.amount, false)}
+                                  </p>
+                                  <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5 tabular-nums">{p.date}</p>
+                                  {p.notes && (
+                                    <p className="text-[10px] sm:text-xs text-slate-500 mt-1 leading-snug">{p.notes}</p>
+                                  )}
+                                </div>
+                                {p.interestSaved > 0 && (
+                                  <p className="text-[10px] sm:text-xs text-emerald-600 dark:text-emerald-400 shrink-0 text-right">
+                                    saved {formatIndianCurrency(p.interestSaved, false)}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 font-semibold">
+              <td className="px-2.5 sm:px-3 py-2.5 text-slate-600 dark:text-slate-300" colSpan={3}>Total</td>
+              <td className="px-2.5 sm:px-3 py-2.5 text-right tabular-nums">{formatIndianCurrency(totals.emiPaid, false)}</td>
+              <td className="px-2.5 sm:px-3 py-2.5 text-right tabular-nums text-teal-700 dark:text-teal-400">
+                {formatIndianCurrency(totals.prepaymentTotal, false)}
+              </td>
+              <td className="px-2.5 sm:px-3 py-2.5 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
+                {formatIndianCurrency(totals.totalOutflow, false)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function LoanMonthlyPacePanel({ stats }) {
+  if (stats?.loanCategory === 'revolving') {
+    return (
+      <div className="p-6 sm:p-8 text-center">
+        <Gauge className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+        <p className="text-sm text-slate-500">Monthly payment pace is available for EMI loans only.</p>
+      </div>
+    );
+  }
+
+  const rows = stats?.monthlyPaceBreakdown ?? [];
+  if (!rows.length) {
+    return (
+      <div className="p-6 sm:p-8 text-center">
+        <Gauge className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+        <p className="text-sm text-slate-500">No paid EMI months yet. Your pace table appears after the first EMI due date.</p>
+      </div>
+    );
+  }
+
+  const { emi, prepayExtra, paceTotal } = getPacePaymentParts(stats);
+
+  return (
+    <div className="p-3 sm:p-5 space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-center">
+          <p className="text-[10px] uppercase text-slate-400">Your EMI</p>
+          <p className="text-sm font-bold text-slate-700 dark:text-slate-200 tabular-nums">
+            {formatIndianCurrency(emi, false)}
+          </p>
+        </div>
+        <div className="rounded-lg bg-teal-50 dark:bg-teal-900/20 px-3 py-2 text-center">
+          <p className="text-[10px] uppercase text-slate-400">Avg prepay/mo</p>
+          <p className="text-sm font-bold text-teal-700 dark:text-teal-400 tabular-nums">
+            {prepayExtra > 0 ? formatIndianCurrency(prepayExtra, false) : '—'}
+          </p>
+          {prepayExtra > 0 && (
+            <p className="text-[9px] text-slate-500 mt-0.5 leading-tight">pace − EMI</p>
+          )}
+        </div>
+        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-center">
+          <p className="text-[10px] uppercase text-slate-400">Avg total/mo</p>
+          <p className="text-sm font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+            {formatIndianCurrency(paceTotal, false)}
+          </p>
+        </div>
+        <div className="rounded-lg bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-center">
+          <p className="text-[10px] uppercase text-slate-400">Your pace closes</p>
+          <p className="text-sm font-bold text-indigo-700 dark:text-indigo-400 tabular-nums">
+            {stats.isClosed ? 'Paid off' : formatDuration(stats.pacePayoffMonths ?? stats.actualPayoffMonths)}
+          </p>
+        </div>
+      </div>
+      <LoanMonthlyPaceTable stats={stats} fullPage />
+    </div>
+  );
+}
+
 function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosingTimeline }) {
   const rows = [
     { label: 'EMI Principal', value: formatIndianCurrency(stats.emiPrincipal), sub: stats.emiBasis === 'sanctioned' ? 'Sanctioned basis' : 'Disbursed basis' },
@@ -496,19 +918,21 @@ function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosin
     { label: 'EMIs Elapsed', value: `${stats.emisPaid} / ${stats.totalEmis}`, sub: `${stats.remainingEmis} on schedule · auto` },
     { label: 'Principal Paid', value: formatIndianCurrency(stats.principalPaid), accent: 'text-emerald-600' },
     { label: 'Interest Paid', value: formatIndianCurrency(stats.interestPaid), accent: 'text-amber-600' },
-    {
-      label: 'Total Paid',
-      value: formatIndianCurrency(stats.totalCashPaid || (stats.principalPaid || 0) + (stats.interestPaid || 0)),
-      sub: 'EMI + prepayments',
-      accent: 'text-slate-700 dark:text-slate-200',
-    },
-    { label: 'Remaining Interest', value: formatIndianCurrency(stats.remainingInterest || 0), accent: 'text-orange-500' },
+    ...(!stats.isClosed ? [
+      {
+        label: 'Total Paid',
+        value: formatIndianCurrency(stats.totalCashPaid || (stats.principalPaid || 0) + (stats.interestPaid || 0)),
+        sub: 'EMI + prepayments',
+        accent: 'text-slate-700 dark:text-slate-200',
+      },
+      { label: 'Remaining Interest', value: formatIndianCurrency(stats.remainingInterest || 0), accent: 'text-orange-500' },
+    ] : []),
     {
       label: 'Prepayments',
       value: formatIndianCurrency(stats.prepaymentTotal),
       sub: `${stats.prepaymentCount} payment(s)`,
       accent: 'text-teal-600',
-      onClick: onToggleClosingTimeline,
+      onClick: stats.isClosed ? undefined : onToggleClosingTimeline,
       active: showClosingTimeline,
     },
     ...(toNum(stats.undisbursed) > 0
@@ -532,7 +956,7 @@ function LoanDetailsMetrics({ stats, showClosingTimeline = false, onToggleClosin
           />
         ))}
       </div>
-      {showClosingTimeline && (
+      {showClosingTimeline && !stats.isClosed && (
         <div className="animate-fade-in w-full">
           <LoanClosingTimelineCard stats={stats} />
         </div>
@@ -2175,84 +2599,89 @@ function BankStatementPanel({ loan }) {
   );
 }
 
-function LoanClosingSummary({ stats, onClick }) {
-  const closed = stats.isClosed;
-  const originalLeft = stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths;
-  const afterPrepayLeft = stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths;
-  const paceLeft = stats.pacePayoffMonths ?? stats.actualPayoffMonths;
-  const paceDelta = stats.monthsSavedVsPace ?? 0;
-  const Tag = onClick ? 'button' : 'div';
+function getLoanSanctionSegments(stats) {
+  const principalPaid = toNum(stats.principalPaid);
+  const outstanding = stats.isClosed ? 0 : toNum(stats.outstanding);
+  const disbursed = toNum(stats.disbursedPrincipal) || principalPaid + outstanding;
+  const undisbursed = Math.max(0, toNum(stats.undisbursed));
+  const sanctioned = Math.max(toNum(stats.sanctioned), disbursed + undisbursed, 1);
+  const paidAmount = stats.isClosed ? disbursed : principalPaid;
 
-  if (closed) {
+  const paidPct = Math.min(100, (paidAmount / sanctioned) * 100);
+  const outstandingPct = Math.min(100 - paidPct, (outstanding / sanctioned) * 100);
+  const undisbursedPct = Math.max(0, 100 - paidPct - outstandingPct);
+
+  return {
+    sanctioned,
+    paidAmount,
+    outstanding,
+    undisbursed,
+    paidPct,
+    outstandingPct,
+    undisbursedPct,
+  };
+}
+
+function LoanSanctionProgressBar({ stats, loanColor, height = 'h-1.5', className }) {
+  const { paidPct, outstandingPct, undisbursedPct } = getLoanSanctionSegments(stats);
+
+  return (
+    <div className={cn('w-full rounded-full overflow-hidden flex bg-slate-200/80 dark:bg-slate-700/80', height, className)}>
+      {paidPct > 0.05 && (
+        <div
+          className="h-full bg-emerald-500 dark:bg-emerald-400 transition-all duration-500"
+          style={{ width: `${paidPct}%` }}
+          title="Principal paid"
+        />
+      )}
+      {outstandingPct > 0.05 && (
+        <div
+          className="h-full transition-all duration-500"
+          style={{ width: `${outstandingPct}%`, backgroundColor: loanColor }}
+          title="Outstanding on disbursed"
+        />
+      )}
+      {undisbursedPct > 0.05 && (
+        <div
+          className="h-full bg-slate-400/70 dark:bg-slate-500/70 transition-all duration-500"
+          style={{ width: `${undisbursedPct}%` }}
+          title="Remaining to disburse"
+        />
+      )}
+    </div>
+  );
+}
+
+function getClosingPaceHint(featured) {
+  if (!featured || featured.isClosed) return null;
+  const paceDelta = featured.monthsSavedVsPace ?? 0;
+  const prepaySaved = featured.monthsSavedVsSchedule ?? 0;
+  if (paceDelta > 0) return `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(featured)}`;
+  if (paceDelta < 0) return `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(featured)}`;
+  if (prepaySaved > 0) return `${formatDuration(prepaySaved)} saved by prepays · ${formatPacePaymentSummary(featured)}`;
+  return formatPacePaymentSummary(featured);
+}
+
+function EmiLoanCardSummary({ stats, savingsReport }) {
+  if (stats.isClosed) {
     return (
-      <Tag
-        type={onClick ? 'button' : undefined}
-        onClick={onClick}
-        className={cn(
-          'col-span-2 p-2 sm:p-3 text-center border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20',
-          onClick && 'cursor-pointer hover:bg-white/70 dark:hover:bg-slate-800/40 transition-colors',
-        )}
-      >
-        <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500 mb-0.5 sm:mb-1">Loan closing</p>
-        <p className="text-sm sm:text-lg font-bold text-emerald-600">Paid off</p>
-        <p className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5">
-          {formatDuration(stats.totalEmis)} original tenure
-        </p>
-      </Tag>
+      <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
+        <div className="grid grid-cols-3 divide-x divide-slate-100 dark:divide-slate-800">
+          <LoanMetricBlock label="Status" value="Paid off" valueClassName="text-emerald-600" sub={`${formatDuration(stats.totalEmis)} original tenure`} />
+          <LoanMetricBlock label="Interest saved" value={formatIndianCurrency(savingsReport.totalSaved || 0)} valueClassName="text-emerald-600" />
+          <LoanMetricBlock label="Prepayments" value={String(stats.prepaymentCount || 0)} sub={formatIndianCurrency(stats.prepaymentTotal || 0, false)} />
+        </div>
+      </div>
     );
   }
 
+  const paceHint = getClosingPaceHint(stats);
+  if (!paceHint) return null;
+
   return (
-    <Tag
-      type={onClick ? 'button' : undefined}
-      onClick={onClick}
-      className={cn(
-        'col-span-2 p-2 sm:p-3 border-t sm:border-t-0 border-slate-100 dark:border-slate-800 bg-white/40 dark:bg-slate-900/20 text-left',
-        onClick && 'cursor-pointer hover:bg-white/70 dark:hover:bg-slate-800/40 transition-colors',
-      )}
-    >
-      <p className="text-[9px] sm:text-[10px] uppercase tracking-wide text-slate-500 mb-1 sm:mb-2 text-center">Loan closing</p>
-      <div className="sm:hidden text-center space-y-0.5">
-        <p className="text-sm font-bold tabular-nums text-emerald-600">
-          {formatDuration(paceLeft)}
-        </p>
-        <p className="text-[9px] text-slate-500 leading-snug">
-          Prepay {formatDuration(afterPrepayLeft)} · Orig {formatDuration(originalLeft)}
-        </p>
-      </div>
-      <div className="hidden sm:block space-y-2 text-xs max-w-xs mx-auto">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-slate-500 shrink-0">Original EMI</span>
-          <span className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums">
-            {formatDuration(originalLeft)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-slate-500 shrink-0">After prepay</span>
-          <span className="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">
-            {formatDuration(afterPrepayLeft)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700">
-          <span className="text-slate-700 dark:text-slate-300 font-medium shrink-0">Your pace</span>
-          <div className="text-right min-w-0">
-            <span className="font-bold tabular-nums text-emerald-600 block">
-              {formatDuration(paceLeft)}
-            </span>
-            <span className="text-[10px] text-emerald-600/80 block">{formatPacePaymentCompact(stats)}</span>
-          </div>
-        </div>
-        <p className="text-[10px] text-slate-500 text-right leading-snug">
-          {paceDelta > 0
-            ? `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(stats)}`
-            : paceDelta < 0
-              ? `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(stats)}`
-              : stats.monthsSavedVsSchedule > 0
-                ? `${formatDuration(stats.monthsSavedVsSchedule)} saved by prepays · ${formatPacePaymentSummary(stats)}`
-                : formatPacePaymentSummary(stats)}
-        </p>
-      </div>
-    </Tag>
+    <div className="px-3 sm:px-4 py-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/30">
+      <p className="text-[10px] sm:text-xs text-slate-500 leading-snug">{paceHint}</p>
+    </div>
   );
 }
 
@@ -2261,12 +2690,14 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
   const savingsReport = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
   const isDeletePending = pendingAction?.type === 'delete';
   const disbursementCount = getDisbursements(loan).length;
-  const isDesktop = useIsSmUp();
-  const [showClosingTimeline, setShowClosingTimeline] = useState(isDesktop);
-
-  useEffect(() => {
-    setShowClosingTimeline(isDesktop);
-  }, [isDesktop]);
+  const [showClosingTimeline, setShowClosingTimeline] = useState(false);
+  const repaidPct = stats.disbursedPrincipal > 0
+    ? Math.min(100, ((stats.disbursedPrincipal - stats.outstanding) / stats.disbursedPrincipal) * 100)
+    : stats.repaymentProgress || 0;
+  const paceLeft = stats.pacePayoffMonths ?? stats.actualPayoffMonths ?? 0;
+  const undisbursed = toNum(stats.undisbursed);
+  const progressSegments = getLoanSanctionSegments(stats);
+  const showProgressBar = progressSegments.sanctioned > 0;
 
   const deleteRows = isDeletePending
     ? [
@@ -2279,71 +2710,88 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
   return (
     <Card className="overflow-hidden !p-0">
       <button type="button" onClick={onToggle} className="w-full text-left">
-        <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" style={{ borderLeftWidth: 4, borderLeftColor: typeInfo.color }}>
-          <div className="flex items-center justify-between gap-2 sm:gap-3">
+        <div
+          className="p-3 sm:p-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
+          style={{ borderLeftWidth: 4, borderLeftColor: typeInfo.color }}
+        >
+          <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                <h3 className="font-bold text-sm sm:text-base truncate max-w-[60vw] sm:max-w-none">{loan.name || 'Unnamed Loan'}</h3>
-                <Badge color={stats.isClosed ? 'green' : 'amber'}>{stats.isClosed ? 'closed' : 'active'}</Badge>
-                <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>{typeInfo.label}</span>
-                <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                  EMI: {stats.emiBasis === 'sanctioned' ? 'Sanctioned' : 'Disbursed'}
-                </span>
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0 flex-1">
+                  <h3 className="font-bold text-sm sm:text-base truncate max-w-[52vw] sm:max-w-none">{loan.name || 'Unnamed Loan'}</h3>
+                  <Badge color={stats.isClosed ? 'green' : 'amber'}>{stats.isClosed ? 'closed' : 'active'}</Badge>
+                  <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>{typeInfo.label}</span>
+                </div>
+                {expanded ? <ChevronUp className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" />}
               </div>
-              <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5 line-clamp-2 sm:line-clamp-none">
-                {loan.lender || '—'} · {formatIndianCurrency(getDailyInterest(stats.outstanding, stats.annualRate), false)}/day
-                {stats.hasManualEmi ? (
-                  <> · You pay {formatIndianCurrency(stats.monthlyPayment, false)} (bank {formatIndianCurrency(stats.scheduledEmi || stats.emi, false)})</>
-                ) : (
-                  <> · EMI {formatIndianCurrency(stats.emi, false)} on {formatIndianCurrency(stats.emiPrincipal, false)}</>
-                )}
-                {savingsReport.totalSaved > 0 && (
-                  <span className="text-emerald-600"> · Saved {formatIndianCurrency(savingsReport.totalSaved)} interest</span>
-                )}
+              <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
+                {loan.lender || '—'}
+                {' · '}
+                {formatRate(stats.annualRate)}
+                {' · '}
+                EMI on {stats.emiBasis === 'sanctioned' ? 'sanctioned' : 'disbursed'} principal
               </p>
+              {showProgressBar && (
+                <div className="mt-2.5 max-w-md">
+                  <div className="flex justify-between items-center gap-2 text-[10px] text-slate-500 mb-1">
+                    <span className="min-w-0 truncate">
+                      {stats.isClosed ? (
+                        <>
+                          {formatIndianCurrency(progressSegments.paidAmount)} principal paid
+                          {undisbursed > 0 && (
+                            <> · {formatIndianCurrency(undisbursed)} undisbursed</>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {formatPercent(repaidPct, 0)} principal repaid
+                          {' · '}
+                          {formatIndianCurrency(stats.outstanding, false)} left
+                          {undisbursed > 0 && (
+                            <> · {formatIndianCurrency(undisbursed)} undisbursed</>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <LoanSanctionProgressBar stats={stats} loanColor={typeInfo.color} />
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-1 shrink-0">
-              {expanded ? <ChevronUp className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" /> : <ChevronDown className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" />}
+            <div className="text-right shrink-0 pl-1">
+              {stats.isClosed ? (
+                <>
+                  <p className="text-lg sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 leading-tight">
+                    Paid off
+                  </p>
+                  <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">
+                    {formatIndianCurrency(stats.interestPaid || 0, false)} interest paid
+                  </p>
+                </>
+              ) : (
+                <>
+              <p className="text-lg sm:text-2xl font-bold tabular-nums text-red-500 dark:text-red-400 leading-tight">
+                {formatIndianCurrency(stats.outstanding)}
+              </p>
+              <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">outstanding</p>
+              {!stats.isClosed && (
+                <p className="text-[10px] sm:text-xs text-rose-600 dark:text-rose-400 mt-1 tabular-nums">
+                  {formatIndianCurrency(getDailyInterest(stats.outstanding, stats.annualRate), false)}/day
+                </p>
+              )}
+              {!stats.isClosed && paceLeft > 0 && (
+                <p className="text-[10px] sm:text-xs text-emerald-600 dark:text-emerald-400 mt-0.5 tabular-nums hidden sm:block">
+                  Closes {formatDuration(paceLeft)}
+                </p>
+              )}
+                </>
+              )}
             </div>
           </div>
         </div>
       </button>
 
-      {/* Summary strip */}
-      <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 divide-x divide-y sm:divide-y-0 divide-slate-100 dark:divide-slate-800 bg-gradient-to-r from-indigo-50/80 to-purple-50/80 dark:from-indigo-950/30 dark:to-purple-950/30">
-        <LoanStatCell
-          label="Daily interest"
-          value={formatIndianCurrency(getDailyInterest(stats.outstanding, stats.annualRate), false)}
-          sub={stats.isClosed || stats.outstanding <= 0 ? 'paid off' : `${formatRate(stats.annualRate)} · on outstanding`}
-          valueClassName="text-rose-600"
-        />
-        <LoanStatCell label="Outstanding" value={formatIndianCurrency(stats.outstanding)} sub={stats.disbursedPrincipal > 0 ? `${formatPercent((stats.outstanding / stats.disbursedPrincipal) * 100, 0)} left` : undefined} valueClassName="text-red-500" />
-        <LoanStatCell
-          label="This Month"
-          value={formatIndianCurrency(stats.monthlyPayment || stats.emi || 0, false)}
-          sub={(
-            <>
-              <span className="text-amber-600 dark:text-amber-400">
-                Int {formatIndianCurrency(stats.monthlyInterest || 0, false)}
-              </span>
-              {' · '}
-              <span className="text-emerald-600 dark:text-emerald-400">
-                Prin {formatIndianCurrency(stats.monthlyScheduledPrincipal || 0, false)}
-              </span>
-              {' · '}
-              <span className={stats.monthlyExtraPrincipal > 0 ? 'text-indigo-600 dark:text-indigo-400' : undefined}>
-                Extra {stats.monthlyExtraPrincipal > 0
-                  ? `+${formatIndianCurrency(stats.monthlyExtraPrincipal, false)}`
-                  : '—'}
-              </span>
-            </>
-          )}
-          subClassName="whitespace-normal"
-          valueClassName="text-indigo-600"
-        />
-        <LoanStatCell label="Int. Saved" value={formatIndianCurrency(savingsReport.totalSaved || 0)} valueClassName="text-emerald-600" />
-        <LoanClosingSummary stats={stats} />
-      </div>
+      <EmiLoanCardSummary stats={stats} savingsReport={savingsReport} />
 
       {expanded && (
         <div className="animate-fade-in">
@@ -2355,20 +2803,6 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             >
               <span className="sm:hidden">Details</span>
               <span className="hidden sm:inline">Loan Details</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onDetailTabChange('disbursements')}
-              className={`px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 ${detailTab === 'disbursements' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-            >
-              <Banknote className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-              <span className="sm:hidden">Draw</span>
-              <span className="hidden sm:inline">Disbursements</span>
-              {disbursementCount > 0 && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
-                  {formatPercent(getDisbursementProgressPct(loan), 0)}
-                </span>
-              )}
             </button>
             <button
               type="button"
@@ -2392,6 +2826,29 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
               <ScrollText className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
               <span className="sm:hidden">Stmt</span>
               <span className="hidden sm:inline">Bank Statement</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onDetailTabChange('pace')}
+              className={`px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 ${detailTab === 'pace' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Gauge className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+              <span className="sm:hidden">Pace</span>
+              <span className="hidden sm:inline">Payment Pace</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onDetailTabChange('disbursements')}
+              className={`px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 ${detailTab === 'disbursements' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Banknote className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+              <span className="sm:hidden">Draw</span>
+              <span className="hidden sm:inline">Disbursements</span>
+              {disbursementCount > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+                  {formatPercent(getDisbursementProgressPct(loan), 0)}
+                </span>
+              )}
             </button>
           </div>
 
@@ -2435,6 +2892,8 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             <div className="p-3 sm:p-5">
               <BankStatementPanel loan={loan} />
             </div>
+          ) : detailTab === 'pace' ? (
+            <LoanMonthlyPacePanel stats={stats} />
           ) : (
         <div className="p-3 sm:p-5 space-y-3 sm:space-y-4">
           {canEdit && (
@@ -2457,10 +2916,11 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
 
           <LoanDetailsMetrics
             stats={stats}
-            showClosingTimeline={showClosingTimeline}
-            onToggleClosingTimeline={() => setShowClosingTimeline((v) => !v)}
+            showClosingTimeline={stats.isClosed ? false : showClosingTimeline}
+            onToggleClosingTimeline={stats.isClosed ? undefined : () => setShowClosingTimeline((v) => !v)}
           />
 
+          {!stats.isClosed && (
           <div>
             <div className="flex justify-between text-sm mb-1.5">
               <span className="text-slate-500">Repayment Progress</span>
@@ -2468,6 +2928,7 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             </div>
             <ProgressBar value={stats.repaymentProgress} color={typeInfo.color} height="h-2.5" />
           </div>
+          )}
 
           {canEdit && isDeletePending && (
             <>
@@ -2488,35 +2949,56 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
 
 function RevolvingLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, pendingAction, onConfirmDelete, onCancelAction, canEdit }) {
   const typeInfo = LOAN_TYPES[stats.loanType] || LOAN_TYPES.credit_card;
+  const utilizationTone = stats.utilization > 70 ? 'text-red-500' : 'text-slate-700 dark:text-slate-200';
 
   return (
     <Card className="overflow-hidden !p-0">
       <button type="button" onClick={onToggle} className="w-full text-left">
-        <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-800/30" style={{ borderLeftWidth: 4, borderLeftColor: typeInfo.color }}>
-          <div className="flex items-center justify-between gap-2">
+        <div className="p-3 sm:p-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" style={{ borderLeftWidth: 4, borderLeftColor: typeInfo.color }}>
+          <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" style={{ color: typeInfo.color }} />
-                <h3 className="font-bold text-sm sm:text-base truncate">{loan.name}</h3>
-                <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>{typeInfo.label}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0 flex-1">
+                  <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" style={{ color: typeInfo.color }} />
+                  <h3 className="font-bold text-sm sm:text-base truncate">{loan.name}</h3>
+                  <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: `${typeInfo.color}20`, color: typeInfo.color }}>{typeInfo.label}</span>
+                </div>
+                {expanded ? <ChevronUp className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" />}
               </div>
-              <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5 truncate">{formatIndianCurrency(stats.statementBalance)} outstanding · Due {stats.dueDate || '—'}</p>
+              <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
+                Due {stats.dueDate || '—'}
+                {' · '}
+                {formatRate(stats.annualRate)}
+                {' · '}
+                {formatIndianCurrency(stats.availableCredit)} available
+              </p>
+              <div className="mt-2.5 max-w-md">
+                <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                  <span>{stats.utilization.toFixed(0)}% utilized</span>
+                  <span>{formatIndianCurrency(stats.creditLimit, false)} limit</span>
+                </div>
+                <ProgressBar value={stats.utilization} color={stats.utilization > 70 ? '#ef4444' : typeInfo.color} height="h-1.5" />
+              </div>
             </div>
-            {expanded ? <ChevronUp className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" /> : <ChevronDown className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" />}
+            <div className="text-right shrink-0">
+              <p className="text-lg sm:text-2xl font-bold tabular-nums text-red-500 dark:text-red-400 leading-tight">
+                {formatIndianCurrency(stats.statementBalance)}
+              </p>
+              <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">outstanding</p>
+              <p className="text-[10px] sm:text-xs text-indigo-600 dark:text-indigo-400 mt-1 tabular-nums">
+                {formatIndianCurrency(stats.monthlyPayment || stats.minDue, false)}
+                {stats.hasManualEmi ? ' you pay' : ' min due'}
+              </p>
+            </div>
           </div>
         </div>
       </button>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-slate-100 dark:divide-slate-800 bg-gradient-to-r from-red-50/80 to-orange-50/80 dark:from-red-950/20 dark:to-orange-950/20">
-        <LoanStatCell label="Outstanding" value={formatIndianCurrency(stats.statementBalance)} valueClassName="text-red-500" />
-        <LoanStatCell
-          label={stats.hasManualEmi ? 'You Pay' : 'Min. Due'}
-          value={formatIndianCurrency(stats.monthlyPayment || stats.minDue, false)}
-          sub={stats.hasManualEmi ? `Min ${formatIndianCurrency(stats.minDue, false)}` : undefined}
-          valueClassName="text-indigo-600"
-        />
-        <LoanStatCell label="Utilization" value={`${stats.utilization.toFixed(0)}%`} />
-        <LoanStatCell label="Due Date" value={stats.dueDate || '—'} valueClassName="text-sm sm:text-lg" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-slate-100 dark:divide-slate-800 border-t border-slate-100 dark:border-slate-800 bg-white/50 dark:bg-slate-900/20">
+        <LoanMetricBlock label="Min. due" value={formatIndianCurrency(stats.minDue, false)} valueClassName="text-indigo-600 dark:text-indigo-400" />
+        <LoanMetricBlock label="You pay" value={formatIndianCurrency(stats.monthlyPayment || stats.minDue, false)} sub={stats.hasManualEmi ? 'Manual payment set' : 'Same as min due'} />
+        <LoanMetricBlock label="Utilization" value={`${stats.utilization.toFixed(0)}%`} valueClassName={utilizationTone} />
+        <LoanMetricBlock label="Available credit" value={formatIndianCurrency(stats.availableCredit)} valueClassName="text-emerald-600 dark:text-emerald-400" />
       </div>
 
       {expanded && (
@@ -2568,8 +3050,6 @@ export function LoansTab() {
   const [pendingAction, setPendingAction] = useState(null);
   const [pendingPrepayDelete, setPendingPrepayDelete] = useState(null);
   const [editPrepayment, setEditPrepayment] = useState(null);
-  const [showPaymentsBreakdown, setShowPaymentsBreakdown] = useState(false);
-  const [showClosingBreakdown, setShowClosingBreakdown] = useState(false);
 
   const expandedIds = loansUi.expandedIds || [];
   const expandedSet = useMemo(() => new Set(expandedIds), [expandedIds]);
@@ -2586,6 +3066,8 @@ export function LoansTab() {
   const setDetailTab = (tab) => setLoansUi({ detailTab: tab });
 
   const defaultClosingLoanId = loansUi.defaultClosingLoanId || null;
+  const storedClosingCarouselIndex = loansUi.closingCarouselIndex;
+  const storedOutflowCarouselIndex = loansUi.outflowCarouselIndex;
 
   const allStats = useMemo(() => loans.map((l) => ({ loan: l, stats: computeLoanStats(l) })), [loans]);
 
@@ -2596,6 +3078,16 @@ export function LoansTab() {
     const totalInterestPaid = allStats.reduce((s, { stats }) => s + (stats.interestPaid || 0), 0);
     const totalMonthlyInterest = active.reduce((s, { stats }) => s + (stats.monthlyInterest || 0), 0);
     const totalMonthlyPrincipal = active.reduce((s, { stats }) => s + (stats.monthlyTotalPrincipal || 0), 0);
+    const totalCashPaid = allStats.reduce((s, { stats }) => s + (stats.totalCashPaid || 0), 0);
+    const totalPrepaymentTotal = allStats.reduce((s, { stats }) => s + (stats.prepaymentTotal || 0), 0);
+    const totalPrepaymentCount = allStats.reduce((s, { stats }) => s + (stats.prepaymentCount || 0), 0);
+    const totalInterestSaved = sumPortfolioInterestSaved(allStats);
+    const totalRemainingInterest = active.reduce((s, { stats }) => s + (stats.remainingInterest || 0), 0);
+    const totalDailyInterest = active.reduce(
+      (s, { stats }) => s + getDailyInterest(stats.outstanding ?? stats.statementBalance, stats.annualRate),
+      0,
+    );
+    const activeLoanCount = active.length;
     const totalPrincipalTaken = allStats.reduce((s, { stats }) => s + getLoanPrincipalTaken(stats), 0);
     const totalPrincipalPaid = allStats.reduce((s, { stats }) => {
       if (stats.loanCategory === 'revolving') {
@@ -2630,11 +3122,30 @@ export function LoansTab() {
           extra: stats.monthlyExtraPrincipal || 0,
           dailyInterest: getDailyInterest(stats.outstanding ?? stats.statementBalance, stats.annualRate),
           interestPaid,
+          prepaymentTotal: stats.prepaymentTotal || 0,
+          prepaymentCount: stats.prepaymentCount || 0,
           interestPaidPct: totalInterestPaid > 0 ? (interestPaid / totalInterestPaid) * 100 : 0,
           pct: totalMonthlyEmi > 0 ? (payment / totalMonthlyEmi) * 100 : 0,
         };
       })
       .sort((a, b) => b.payment - a.payment || b.interestPaid - a.interestPaid);
+
+    const activeOutflowLoans = emiBreakdown.filter((item) => !item.isClosed && item.payment > 0);
+    const outflowCarouselItems = [
+      {
+        id: OUTFLOW_COMBINED_ID,
+        isCombined: true,
+        name: 'All loans',
+        payment: totalMonthlyEmi,
+        interest: totalMonthlyInterest,
+        principal: totalMonthlyPrincipal,
+        interestPaid: totalInterestPaid,
+        prepaymentTotal: totalPrepaymentTotal,
+        dailyInterest: totalDailyInterest,
+        activeLoanCount,
+      },
+      ...activeOutflowLoans,
+    ];
 
     const closingBreakdown = allStats
       .filter(({ stats }) => stats.loanCategory !== 'revolving')
@@ -2649,6 +3160,11 @@ export function LoansTab() {
         afterPrepayPayoffMonths: stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths,
         pacePayoffMonths: stats.pacePayoffMonths ?? stats.actualPayoffMonths,
         averageMonthlyEmi: stats.averageMonthlyEmi ?? stats.actualMonthlyEmi ?? stats.monthlyPayment,
+        actualMonthlyEmi: stats.actualMonthlyEmi,
+        scheduledEmi: stats.scheduledEmi ?? stats.emi,
+        emi: stats.emi,
+        monthlyPayment: stats.monthlyPayment,
+        paceMonthlyPayment: stats.paceMonthlyPayment,
         averageMonthlyPrepayment: stats.averageMonthlyPrepayment ?? 0,
         averageMonthlyPayment: stats.paceMonthlyPayment ?? stats.averageMonthlyPayment ?? stats.monthlyPayment,
         scheduleTimeRemainingMonths: stats.scheduleTimeRemainingMonths,
@@ -2691,9 +3207,17 @@ export function LoansTab() {
       totalMonthlyPrincipal,
       totalPrincipalTaken,
       totalPrincipalPaid,
+      totalCashPaid,
+      totalPrepaymentTotal,
+      totalPrepaymentCount,
+      totalInterestSaved,
+      totalRemainingInterest,
+      totalDailyInterest,
+      activeLoanCount,
       remainingPct,
       repaidPct,
       emiBreakdown,
+      outflowCarouselItems,
       closingBreakdown,
       lastLoanClosesMonths,
       maxScheduleRemaining,
@@ -2703,6 +3227,56 @@ export function LoansTab() {
       hasExplicitDefault,
     };
   }, [allStats, defaultClosingLoanId]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const issues = validateLoansDashboardSummary(summary, allStats);
+    if (issues.length > 0) {
+      console.warn('[Loans dashboard summary]', issues);
+    }
+  }, [summary, allStats]);
+
+  const closingCarouselIndex = useMemo(() => {
+    const items = summary.closingBreakdown;
+    if (!items.length) return 0;
+    if (
+      typeof storedClosingCarouselIndex === 'number'
+      && storedClosingCarouselIndex >= 0
+      && storedClosingCarouselIndex < items.length
+    ) {
+      return storedClosingCarouselIndex;
+    }
+    if (defaultClosingLoanId) {
+      const defaultIdx = items.findIndex((item) => loanIdsMatch(item.id, defaultClosingLoanId));
+      if (defaultIdx >= 0) return defaultIdx;
+    }
+    if (summary.featuredClosingLoan) {
+      const featuredIdx = items.findIndex((item) => loanIdsMatch(item.id, summary.featuredClosingLoan.id));
+      if (featuredIdx >= 0) return featuredIdx;
+    }
+    return 0;
+  }, [summary.closingBreakdown, summary.featuredClosingLoan, defaultClosingLoanId, storedClosingCarouselIndex]);
+
+  const outflowCarouselIndex = useMemo(() => {
+    const items = summary.outflowCarouselItems;
+    if (!items.length) return 0;
+    if (
+      typeof storedOutflowCarouselIndex === 'number'
+      && storedOutflowCarouselIndex >= 0
+      && storedOutflowCarouselIndex < items.length
+    ) {
+      return storedOutflowCarouselIndex;
+    }
+    return 0;
+  }, [summary.outflowCarouselItems, storedOutflowCarouselIndex]);
+
+  const handleSetClosingDefault = useCallback((loanId) => {
+    const idx = summary.closingBreakdown.findIndex((item) => loanIdsMatch(item.id, loanId));
+    setLoansUi({
+      defaultClosingLoanId: loanId,
+      closingCarouselIndex: idx >= 0 ? idx : 0,
+    });
+  }, [summary.closingBreakdown, setLoansUi]);
 
   const saveFinance = (updatedPf, audit) => updateFinance(updatedPf, audit);
 
@@ -2803,76 +3377,54 @@ export function LoansTab() {
         ) : null}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 sm:gap-4">
-        <DashboardStatCard
-          label="Total Outstanding"
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 items-stretch">
+        <DashboardHeroCard
+          theme="rose"
+          icon={TrendingDown}
+          label="Total outstanding"
           value={formatIndianCurrency(summary.totalOutstanding)}
-          sub={summary.totalPrincipalTaken > 0
-            ? `${formatIndianCurrency(summary.totalPrincipalTaken)} taken · ${formatPercent(summary.remainingPct, 1)} remaining`
+          hint={summary.totalPrincipalTaken > 0
+            ? `${formatIndianCurrency(summary.totalPrincipalTaken)} principal taken · ${summary.activeLoanCount} active loan${summary.activeLoanCount === 1 ? '' : 's'}`
             : 'No principal recorded'}
-          color="red"
-          footer={summary.totalPrincipalTaken > 0 ? (
-            <div className="mt-2 space-y-1">
-              <ProgressBar value={summary.repaidPct} color="#ef4444" height="h-1.5" />
-              <p className="text-[10px] text-slate-500">{formatPercent(summary.repaidPct, 1)} principal repaid</p>
+        >
+          {summary.totalPrincipalTaken > 0 && (
+            <div className="space-y-2">
+              <ProgressBar value={summary.repaidPct} color="#ef4444" height="h-2" />
+              <p className="text-[10px] sm:text-xs text-slate-500">{formatPercent(summary.repaidPct, 1)} principal repaid</p>
+              <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+                <DashboardMetricTile label="Principal paid" value={formatIndianCurrency(summary.totalPrincipalPaid)} />
+                <DashboardMetricTile
+                  label="Interest saved"
+                  value={formatIndianCurrency(summary.totalInterestSaved)}
+                  hint={summary.totalPrepaymentCount > 0 ? 'from prepayments' : 'No prepayments yet'}
+                  valueClassName="text-emerald-600 dark:text-emerald-400"
+                />
+                <DashboardMetricTile
+                  label="Interest paid"
+                  value={formatIndianCurrency(summary.totalInterestPaid)}
+                  hint="till date"
+                  valueClassName="text-orange-600 dark:text-orange-400"
+                />
+                <DashboardMetricTile label="Daily interest" value={`${formatIndianCurrency(summary.totalDailyInterest, false)}/day`} valueClassName="text-rose-600 dark:text-rose-400" />
+              </div>
             </div>
-          ) : null}
-        />
-        <DashboardStatCard
-          label="EMI & interest"
-          value={formatIndianCurrency(summary.totalMonthlyEmi, false)}
-          secondaryValue="/ month outflow"
-          sub={showPaymentsBreakdown ? 'Tap to hide loan split' : 'Tap for payment split by loan'}
-          color="indigo"
-          onClick={() => { setShowPaymentsBreakdown((v) => !v); setShowClosingBreakdown(false); }}
-          active={showPaymentsBreakdown}
-          footer={(
-            <LoanPaymentsDashboardFooter
-              monthlyInterest={summary.totalMonthlyInterest}
-              monthlyPrincipal={summary.totalMonthlyPrincipal}
-              interestPaid={summary.totalInterestPaid}
-            />
           )}
+        </DashboardHeroCard>
+
+        <DashboardMonthlyOutflowCard
+          items={summary.outflowCarouselItems}
+          carouselIndex={outflowCarouselIndex}
+          onCarouselIndexChange={(idx) => setLoansUi({ outflowCarouselIndex: idx })}
         />
-        <DashboardStatCard
-          label="Loan closing"
-          value={(() => {
-            const featured = summary.featuredClosingLoan;
-            if (!featured) return 'Paid off';
-            if (featured.isClosed) return 'Paid off';
-            return formatDuration(featured.pacePayoffMonths ?? featured.actualPayoffMonths);
-          })()}
-          sub={showClosingBreakdown
-            ? 'Tap to hide loan split'
-            : (() => {
-                const featured = summary.featuredClosingLoan;
-                if (!featured) return 'All EMI loans paid off';
-                if (featured.isClosed) return `${featured.name} · paid off`;
-                if (summary.hasExplicitDefault) return `${featured.name} · default`;
-                return `${featured.name} · longest at your pace`;
-              })()}
-          color="green"
-          onClick={() => { setShowClosingBreakdown((v) => !v); setShowPaymentsBreakdown(false); }}
-          active={showClosingBreakdown}
-          footer={<LoanClosingDashboardFooter featured={summary.featuredClosingLoan} />}
+
+        <DashboardLoanClosingCard
+          items={summary.closingBreakdown}
+          carouselIndex={closingCarouselIndex}
+          onCarouselIndexChange={(idx) => setLoansUi({ closingCarouselIndex: idx })}
+          defaultLoanId={defaultClosingLoanId}
+          onSetDefault={handleSetClosingDefault}
         />
       </div>
-
-      {showPaymentsBreakdown && (
-        <EmiBreakdownPanel
-          items={summary.emiBreakdown}
-          total={summary.totalMonthlyEmi}
-          interestPaidTotal={summary.totalInterestPaid}
-        />
-      )}
-
-      {showClosingBreakdown && (
-        <LoanClosingBreakdownPanel
-          items={summary.closingBreakdown}
-          defaultLoanId={defaultClosingLoanId}
-          onSetDefault={(loanId) => setLoansUi({ defaultClosingLoanId: loanId })}
-        />
-      )}
 
       {loans.length === 0 && (
         <Card className="text-center py-12">
