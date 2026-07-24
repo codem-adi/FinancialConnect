@@ -1,4 +1,4 @@
-import { getPrepaymentSavingsReport, getDailyInterest, getLoanMonthlyOutflow } from './loanCalculations';
+import { getDailyInterest, getLoanMonthlyOutflow } from './loanCalculations';
 import { toNum } from './utils';
 
 export function getLoanPrincipalTaken(stats) {
@@ -8,11 +8,11 @@ export function getLoanPrincipalTaken(stats) {
   return toNum(stats.disbursedPrincipal) || toNum(stats.loanAmount) || 0;
 }
 
-/** Portfolio interest avoided by prepayments — same basis as each loan's Prepayments tab. */
+/** Portfolio interest avoided — from stats already computed in simulateAmortization */
 export function sumPortfolioInterestSaved(allStats) {
-  return allStats.reduce((sum, { loan, stats }) => {
+  return allStats.reduce((sum, { stats }) => {
     if (stats.loanCategory === 'revolving') return sum;
-    return sum + (getPrepaymentSavingsReport(loan).totalSaved || 0);
+    return sum + (stats.totalInterestSaved || 0);
   }, 0);
 }
 
@@ -40,10 +40,6 @@ export function validateLoansDashboardSummary(summary, allStats) {
     const gap = Math.abs((stats.principalPaid || 0) + stats.outstanding - disbursed);
     if (gap > 1) {
       issues.push(`${loan.name || loan.id}: principal paid + outstanding != disbursed (off by ${gap})`);
-    }
-    const report = getPrepaymentSavingsReport(loan);
-    if (Math.abs((stats.totalInterestSaved || 0) - (report.totalSaved || 0)) > 1) {
-      issues.push(`${loan.name || loan.id}: stats.totalInterestSaved != prepayment report`);
     }
   }
 

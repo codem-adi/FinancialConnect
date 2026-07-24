@@ -2447,11 +2447,10 @@ function StatementDesktopRow({ entry }) {
   );
 }
 
-function BankStatementPanel({ loan }) {
+function BankStatementPanel({ loan, stats }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const entries = useMemo(() => buildLoanBankStatement(loan), [loan]);
-  const stats = useMemo(() => computeLoanStats(loan), [loan]);
 
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -2662,13 +2661,13 @@ function getClosingPaceHint(featured) {
   return formatPacePaymentSummary(featured);
 }
 
-function EmiLoanCardSummary({ stats, savingsReport }) {
+function EmiLoanCardSummary({ stats }) {
   if (stats.isClosed) {
     return (
       <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
         <div className="grid grid-cols-3 divide-x divide-slate-100 dark:divide-slate-800">
           <LoanMetricBlock label="Status" value="Paid off" valueClassName="text-emerald-600" sub={`${formatDuration(stats.totalEmis)} original tenure`} />
-          <LoanMetricBlock label="Interest saved" value={formatIndianCurrency(savingsReport.totalSaved || 0)} valueClassName="text-emerald-600" />
+          <LoanMetricBlock label="Interest saved" value={formatIndianCurrency(stats.totalInterestSaved || 0)} valueClassName="text-emerald-600" />
           <LoanMetricBlock label="Prepayments" value={String(stats.prepaymentCount || 0)} sub={formatIndianCurrency(stats.prepaymentTotal || 0, false)} />
         </div>
       </div>
@@ -2687,7 +2686,6 @@ function EmiLoanCardSummary({ stats, savingsReport }) {
 
 function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDisburse, onDisburseAdd, onDisburseConfirm, onDisburseCancel, onDisburseEdit, onDisburseDelete, pendingDisburseDeleteId, onConfirmDisburseDelete, onCancelDisburseDelete, onPrepay, showPrepay, onPrepayConfirm, onPrepayCancel, onPrepayEdit, onPrepayDelete, pendingPrepayDeleteId, onConfirmPrepayDelete, onCancelPrepayDelete, genId, pendingAction, onConfirmDelete, onCancelAction, detailTab, onDetailTabChange, canEdit, onMarkEmiUnpaid, onClearEmiUnpaid }) {
   const typeInfo = LOAN_TYPES[stats.loanType] || LOAN_TYPES.other;
-  const savingsReport = useMemo(() => getPrepaymentSavingsReport(loan), [loan]);
   const isDeletePending = pendingAction?.type === 'delete';
   const disbursementCount = getDisbursements(loan).length;
   const [showClosingTimeline, setShowClosingTimeline] = useState(false);
@@ -2791,7 +2789,7 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
         </div>
       </button>
 
-      <EmiLoanCardSummary stats={stats} savingsReport={savingsReport} />
+      <EmiLoanCardSummary stats={stats} />
 
       {expanded && (
         <div className="animate-fade-in">
@@ -2890,7 +2888,7 @@ function EmiLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, showDi
             </div>
           ) : detailTab === 'statement' ? (
             <div className="p-3 sm:p-5">
-              <BankStatementPanel loan={loan} />
+              <BankStatementPanel loan={loan} stats={stats} />
             </div>
           ) : detailTab === 'pace' ? (
             <LoanMonthlyPacePanel stats={stats} />
@@ -3039,7 +3037,7 @@ function RevolvingLoanCard({ loan, stats, expanded, onToggle, onEdit, onDelete, 
 export function LoansTab() {
   const { data, updateFinance, generateId: genId, canEdit } = useApp();
   const pf = data.personalFinance;
-  const loans = (pf.loans || []).map(normalizeLoan);
+  const loans = useMemo(() => (pf.loans || []).map(normalizeLoan), [pf.loans]);
   const [loansUi, setLoansUi] = useUiSection('loans');
 
   const [editLoan, setEditLoan] = useState(null);
@@ -3236,9 +3234,24 @@ export function LoansTab() {
     }
   }, [summary, allStats]);
 
+  const closingCarouselUserNavigatedRef = useRef(false);
+
   const closingCarouselIndex = useMemo(() => {
     const items = summary.closingBreakdown;
     if (!items.length) return 0;
+
+    const defaultIdx = defaultClosingLoanId
+      ? items.findIndex((item) => loanIdsMatch(item.id, defaultClosingLoanId))
+      : -1;
+
+    if (defaultIdx >= 0 && !closingCarouselUserNavigatedRef.current) {
+      const storedIdx = typeof storedClosingCarouselIndex === 'number' ? storedClosingCarouselIndex : null;
+      const storedLoan = storedIdx != null && storedIdx >= 0 && storedIdx < items.length ? items[storedIdx] : null;
+      if (!storedLoan || !loanIdsMatch(storedLoan.id, defaultClosingLoanId)) {
+        return defaultIdx;
+      }
+    }
+
     if (
       typeof storedClosingCarouselIndex === 'number'
       && storedClosingCarouselIndex >= 0
@@ -3246,10 +3259,7 @@ export function LoansTab() {
     ) {
       return storedClosingCarouselIndex;
     }
-    if (defaultClosingLoanId) {
-      const defaultIdx = items.findIndex((item) => loanIdsMatch(item.id, defaultClosingLoanId));
-      if (defaultIdx >= 0) return defaultIdx;
-    }
+    if (defaultIdx >= 0) return defaultIdx;
     if (summary.featuredClosingLoan) {
       const featuredIdx = items.findIndex((item) => loanIdsMatch(item.id, summary.featuredClosingLoan.id));
       if (featuredIdx >= 0) return featuredIdx;
@@ -3257,9 +3267,17 @@ export function LoansTab() {
     return 0;
   }, [summary.closingBreakdown, summary.featuredClosingLoan, defaultClosingLoanId, storedClosingCarouselIndex]);
 
+  const handleClosingCarouselChange = useCallback((idx) => {
+    closingCarouselUserNavigatedRef.current = true;
+    setLoansUi({ closingCarouselIndex: idx });
+  }, [setLoansUi]);
+
+  const outflowCarouselUserNavigatedRef = useRef(false);
+
   const outflowCarouselIndex = useMemo(() => {
     const items = summary.outflowCarouselItems;
     if (!items.length) return 0;
+    if (!outflowCarouselUserNavigatedRef.current) return 0;
     if (
       typeof storedOutflowCarouselIndex === 'number'
       && storedOutflowCarouselIndex >= 0
@@ -3270,8 +3288,14 @@ export function LoansTab() {
     return 0;
   }, [summary.outflowCarouselItems, storedOutflowCarouselIndex]);
 
+  const handleOutflowCarouselChange = useCallback((idx) => {
+    outflowCarouselUserNavigatedRef.current = true;
+    setLoansUi({ outflowCarouselIndex: idx });
+  }, [setLoansUi]);
+
   const handleSetClosingDefault = useCallback((loanId) => {
     const idx = summary.closingBreakdown.findIndex((item) => loanIdsMatch(item.id, loanId));
+    closingCarouselUserNavigatedRef.current = false;
     setLoansUi({
       defaultClosingLoanId: loanId,
       closingCarouselIndex: idx >= 0 ? idx : 0,
@@ -3414,13 +3438,13 @@ export function LoansTab() {
         <DashboardMonthlyOutflowCard
           items={summary.outflowCarouselItems}
           carouselIndex={outflowCarouselIndex}
-          onCarouselIndexChange={(idx) => setLoansUi({ outflowCarouselIndex: idx })}
+          onCarouselIndexChange={handleOutflowCarouselChange}
         />
 
         <DashboardLoanClosingCard
           items={summary.closingBreakdown}
           carouselIndex={closingCarouselIndex}
-          onCarouselIndexChange={(idx) => setLoansUi({ closingCarouselIndex: idx })}
+          onCarouselIndexChange={handleClosingCarouselChange}
           defaultLoanId={defaultClosingLoanId}
           onSetDefault={handleSetClosingDefault}
         />
