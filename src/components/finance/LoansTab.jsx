@@ -12,7 +12,7 @@ import {
   computeLoanStats, createEmptyLoan, normalizeLoan, LOAN_TYPES, calculateEMI,
   applyPrepayment, updatePrepayment, removePrepayment,
   previewPrepaymentImpact, getPrepaymentSavingsReport,
-  calculateInterestSavedForDate, getPrepayments, formatPayoffAcceleration, formatDuration,
+  calculateInterestSavedForDate, getPrepayments, formatPayoffAcceleration, formatDuration, formatPacePaymentSummary, formatPacePaymentCompact,
   getEmiPrincipal, getDisbursedPrincipal, EMI_BASIS, getLoanMonthlyOutflow,
   computeMonthlyPaymentBreakdown, buildLoanBankStatement, getMaxPrepaymentAmount,
   getManualEmiPayments, getPaidEmiCount, MAX_TENURE_MONTHS, formatManualEmiPaymentsSummary,
@@ -120,22 +120,24 @@ function LoanClosingDashboardFooter({ featured }) {
           <p className="text-[10px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
             {formatDuration(afterPrepayLeft)}
           </p>
+          <p className="text-[8px] sm:text-[9px] text-indigo-500/80 leading-tight">EMI only</p>
         </div>
         <div className="min-w-0 text-right">
           <p className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 leading-tight">Your pace</p>
           <p className="text-[10px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
             {formatDuration(paceLeft)}
           </p>
+          <p className="text-[8px] sm:text-[9px] text-emerald-600/80 leading-tight">{formatPacePaymentCompact(featured)}</p>
         </div>
       </div>
       <p className="text-[8px] sm:text-[10px] text-slate-500 leading-snug">
         {paceDelta > 0
-          ? `${formatDuration(paceDelta)} sooner at avg ${formatIndianCurrency(featured.averageMonthlyPayment || 0, false)}/mo`
+          ? `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(featured)}`
           : paceDelta < 0
-            ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+            ? `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(featured)}`
             : prepaySaved > 0
-              ? `${formatDuration(prepaySaved)} saved by prepays`
-              : 'Same as bank EMI pace'}
+              ? `${formatDuration(prepaySaved)} saved by prepays · ${formatPacePaymentSummary(featured)}`
+              : formatPacePaymentSummary(featured)}
       </p>
     </div>
   );
@@ -357,21 +359,22 @@ function LoanClosingBreakdownPanel({ items, defaultLoanId, onSetDefault }) {
                   <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-center">
                     <p className="text-slate-500">Your pace</p>
                     <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatDuration(item.pacePayoffMonths ?? item.actualPayoffMonths)}</p>
+                    <p className="text-[9px] text-emerald-600/80">{formatPacePaymentCompact(item)}</p>
                   </div>
                 </div>
               )}
               {!closed && (item.monthsSavedVsPace > 0 || item.monthsSavedVsSchedule > 0) && (
                 <p className="text-[10px] text-teal-700 dark:text-teal-400 mt-2 text-right">
                   {item.monthsSavedVsPace > 0
-                    ? `${formatDuration(item.monthsSavedVsPace)} sooner at avg ${formatIndianCurrency(item.averageMonthlyPayment || 0, false)}/mo`
+                    ? `${formatDuration(item.monthsSavedVsPace)} sooner · ${formatPacePaymentSummary(item)}`
                     : `${formatDuration(item.monthsSavedVsSchedule)} earlier from prepays`}
                 </p>
               )}
               {!closed && !(item.monthsSavedVsPace > 0) && !(item.monthsSavedVsSchedule > 0) && (
                 <p className="text-[10px] text-slate-500 mt-2 text-right">
                   {item.monthsSavedVsPace < 0
-                    ? `${formatDuration(Math.abs(item.monthsSavedVsPace))} longer at current pace`
-                    : 'Same pace as bank EMI'}
+                    ? `${formatDuration(Math.abs(item.monthsSavedVsPace))} longer · ${formatPacePaymentSummary(item)}`
+                    : formatPacePaymentSummary(item)}
                 </p>
               )}
             </div>
@@ -567,12 +570,14 @@ function LoanClosingTimelineCard({ stats }) {
           <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums leading-tight">
             {formatDuration(afterPrepayLeft)}
           </p>
+          <p className="text-[9px] text-indigo-500/80 leading-tight">EMI only</p>
         </div>
         <div className="min-w-0 text-right">
           <p className="text-[9px] uppercase tracking-wider text-slate-400">Your pace</p>
           <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight">
             {formatDuration(paceLeft)}
           </p>
+          <p className="text-[9px] text-emerald-600/80 leading-tight">{formatPacePaymentCompact(stats)}</p>
         </div>
       </div>
 
@@ -585,12 +590,12 @@ function LoanClosingTimelineCard({ stats }) {
 
       <p className="mt-1 text-[10px] text-slate-500 leading-snug">
         {paceDelta > 0
-          ? `${formatDuration(paceDelta)} sooner at avg ${formatIndianCurrency(stats.averageMonthlyPayment || stats.monthlyPayment || 0, false)}/mo`
+          ? `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(stats)}`
           : paceDelta < 0
-            ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+            ? `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(stats)}`
             : prepaySaved > 0
-              ? `${formatDuration(prepaySaved)} saved by prepays · same as bank EMI going forward`
-              : 'On track with bank EMI'}
+              ? `${formatDuration(prepaySaved)} saved by prepays · ${formatPacePaymentSummary(stats)}`
+              : formatPacePaymentSummary(stats)}
       </p>
     </div>
   );
@@ -743,8 +748,8 @@ function buildLoanShareText(loan, stats, isRevolving) {
     if (stats && !stats.isClosed) {
       lines.push(
         `Original EMI closing: ${formatDuration(stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths)}`,
-        `After prepay closing: ${formatDuration(stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths)}`,
-        `Your pace closing: ${formatDuration(stats.pacePayoffMonths ?? stats.actualPayoffMonths)} (avg ${formatIndianCurrency(stats.averageMonthlyPayment || stats.monthlyPayment || 0, false)}/mo)`,
+        `After prepay closing: ${formatDuration(stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths)} (EMI only)`,
+        `Your pace closing: ${formatDuration(stats.pacePayoffMonths ?? stats.actualPayoffMonths)} (${formatPacePaymentSummary(stats)})`,
       );
     } else if (stats?.isClosed) {
       lines.push('Status: Paid off');
@@ -2224,18 +2229,21 @@ function LoanClosingSummary({ stats, onClick }) {
         </div>
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700">
           <span className="text-slate-700 dark:text-slate-300 font-medium shrink-0">Your pace</span>
-          <span className="font-bold tabular-nums text-emerald-600">
-            {formatDuration(paceLeft)}
-          </span>
+          <div className="text-right min-w-0">
+            <span className="font-bold tabular-nums text-emerald-600 block">
+              {formatDuration(paceLeft)}
+            </span>
+            <span className="text-[10px] text-emerald-600/80 block">{formatPacePaymentCompact(stats)}</span>
+          </div>
         </div>
         <p className="text-[10px] text-slate-500 text-right leading-snug">
           {paceDelta > 0
-            ? `${formatDuration(paceDelta)} sooner · avg ${formatIndianCurrency(stats.averageMonthlyPayment || 0, false)}/mo`
+            ? `${formatDuration(paceDelta)} sooner · ${formatPacePaymentSummary(stats)}`
             : paceDelta < 0
-              ? `${formatDuration(Math.abs(paceDelta))} longer at current pace`
+              ? `${formatDuration(Math.abs(paceDelta))} longer · ${formatPacePaymentSummary(stats)}`
               : stats.monthsSavedVsSchedule > 0
-                ? `${formatDuration(stats.monthsSavedVsSchedule)} saved by prepays`
-                : 'Same as bank EMI pace'}
+                ? `${formatDuration(stats.monthsSavedVsSchedule)} saved by prepays · ${formatPacePaymentSummary(stats)}`
+                : formatPacePaymentSummary(stats)}
         </p>
       </div>
     </Tag>
@@ -2634,7 +2642,9 @@ export function LoansTab() {
         originalEmiPayoffMonths: stats.originalEmiPayoffMonths ?? stats.scheduleTimeRemainingMonths,
         afterPrepayPayoffMonths: stats.afterPrepayPayoffMonths ?? stats.actualPayoffMonths,
         pacePayoffMonths: stats.pacePayoffMonths ?? stats.actualPayoffMonths,
-        averageMonthlyPayment: stats.averageMonthlyPayment || stats.monthlyPayment,
+        averageMonthlyEmi: stats.averageMonthlyEmi ?? stats.actualMonthlyEmi ?? stats.monthlyPayment,
+        averageMonthlyPrepayment: stats.averageMonthlyPrepayment ?? 0,
+        averageMonthlyPayment: stats.paceMonthlyPayment ?? stats.averageMonthlyPayment ?? stats.monthlyPayment,
         scheduleTimeRemainingMonths: stats.scheduleTimeRemainingMonths,
         actualPayoffMonths: stats.actualPayoffMonths,
         monthsSavedVsSchedule: stats.monthsSavedVsSchedule,

@@ -663,8 +663,10 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const appliedPrepIds = new Set();
   const appliedDisbIds = new Set();
   const scheduledEmi = Math.round(originalEmi);
-  /** Paid EMI amounts (excludes unpaid/skipped) — used for payment-pace average */
+  /** Paid EMI amounts (excludes unpaid/skipped) — used for EMI-only projection */
   const paidPaymentAmounts = [];
+  /** Prepayment amounts per paid EMI month — used for prepayment-pace average */
+  const monthlyPrepaymentAmounts = [];
 
   for (let month = 0; month < paidEmis; month++) {
     const period = computePeriodInterestWithDisbursements(balance, loan, month, defaultRate, allDisbursements, appliedDisbIds);
@@ -682,6 +684,9 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     const prep = applyPrepaymentsInPeriod(loan, month, balance, allPrepayments, appliedPrepIds);
     balance = prep.balance;
     prepaymentTotal += prep.prepaymentTotal;
+    if (monthResult.status === 'paid') {
+      monthlyPrepaymentAmounts.push(Math.round(prep.prepaymentTotal));
+    }
   }
 
   for (const d of allDisbursements) {
@@ -708,10 +713,42 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const contractualRemainingMonths = Math.max(0, tenure - paidEmis);
   const emi = Math.round(originalEmi);
 
-  // (2) After prepayments — current outstanding, continue at bank scheduled EMI
+  const paymentBreakdown = computeMonthlyPaymentBreakdown(
+    loan,
+    outstanding,
+    scheduledEmi,
+    defaultRate,
+    Math.min(paidEmis, Math.max(0, tenure - 1)),
+  );
+
+  const PACE_LOOKBACK = 12;
+  const recentPaid = paidPaymentAmounts.slice(-PACE_LOOKBACK);
+  const currentPay = Math.round(toNum(paymentBreakdown.monthlyPayment));
+  let actualMonthlyEmi = emi;
+  if (recentPaid.length > 0) {
+    const sum = recentPaid.reduce((s, a) => s + a, 0);
+    actualMonthlyEmi = Math.round(sum / recentPaid.length);
+  } else if (currentPay > 0) {
+    actualMonthlyEmi = currentPay;
+  }
+  if (paymentBreakdown.hasManualEmi && currentPay > 0) {
+    actualMonthlyEmi = recentPaid.length > 0
+      ? Math.round((actualMonthlyEmi * recentPaid.length + currentPay) / (recentPaid.length + 1))
+      : currentPay;
+  }
+
+  const recentPrepayments = monthlyPrepaymentAmounts.slice(-PACE_LOOKBACK);
+  const prepaymentsInWindow = recentPrepayments.filter((amount) => amount > 0);
+  const averageMonthlyPrepayment = prepaymentsInWindow.length > 0
+    ? Math.round(prepaymentsInWindow.reduce((s, a) => s + a, 0) / prepaymentsInWindow.length)
+    : 0;
+
+  const paceMonthlyPayment = actualMonthlyEmi + averageMonthlyPrepayment;
+
+  // (2) After prepay — today's balance, continue at your EMI only (no future prepayments)
   const afterPrepayPayoffMonths = outstanding <= 0
     ? 0
-    : projectMonthsToPayoff(outstanding, emi, defaultRate);
+    : projectMonthsToPayoff(outstanding, Math.max(actualMonthlyEmi, 1), defaultRate);
 
   // (1) Original EMI — as if you only ever paid bank EMI (no prepays, no manual overpay)
   const hasManualHistory = getManualEmiPayments(loan).length > 0;
@@ -726,35 +763,10 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     originalEmiPayoffMonths = baseline.afterPrepayPayoffMonths ?? baseline.actualPayoffMonths;
   }
 
-  const paymentBreakdown = computeMonthlyPaymentBreakdown(
-    loan,
-    outstanding,
-    scheduledEmi,
-    defaultRate,
-    Math.min(paidEmis, Math.max(0, tenure - 1)),
-  );
-
-  // (3) Your pace — average of recent paid EMIs (how you actually pay), projected forward
-  const PACE_LOOKBACK = 12;
-  const recentPaid = paidPaymentAmounts.slice(-PACE_LOOKBACK);
-  const currentPay = Math.round(toNum(paymentBreakdown.monthlyPayment));
-  let averageMonthlyPayment = emi;
-  if (recentPaid.length > 0) {
-    const sum = recentPaid.reduce((s, a) => s + a, 0);
-    averageMonthlyPayment = Math.round(sum / recentPaid.length);
-  } else if (currentPay > 0) {
-    averageMonthlyPayment = currentPay;
-  }
-  // Prefer current set payment when it is the active "you pay" amount and differs from history
-  if (paymentBreakdown.hasManualEmi && currentPay > 0) {
-    averageMonthlyPayment = recentPaid.length > 0
-      ? Math.round((averageMonthlyPayment * recentPaid.length + currentPay) / (recentPaid.length + 1))
-      : currentPay;
-  }
-
+  // (3) Your pace — your EMI + average monthly prepayment, projected forward
   const pacePayoffMonths = outstanding <= 0
     ? 0
-    : projectMonthsToPayoff(outstanding, Math.max(averageMonthlyPayment, 1), defaultRate);
+    : projectMonthsToPayoff(outstanding, Math.max(paceMonthlyPayment, 1), defaultRate);
 
   const scheduleRemainingMonths = originalEmiPayoffMonths;
   const actualPayoffMonths = afterPrepayPayoffMonths;
@@ -768,7 +780,7 @@ export function simulateAmortization(loan, extraPrepayments = []) {
   const remainingInterest = outstanding > 0
     ? Math.round(projectRemainingInterest(
       outstanding,
-      emi,
+      Math.max(actualMonthlyEmi, 1),
       defaultRate,
       Math.max(afterPrepayPayoffMonths, 1),
     ))
@@ -812,12 +824,18 @@ export function simulateAmortization(loan, extraPrepayments = []) {
     originalEmiPayoffMonths,
     scheduleTimeRemainingMonths: scheduleRemainingMonths,
     scheduleTimeRemaining: formatDuration(scheduleRemainingMonths),
-    /** (2) Closing after prepays already made — continue at bank EMI */
+    /** (2) Closing after prepays already made — continue at your EMI only */
     afterPrepayPayoffMonths,
     actualPayoffMonths,
     actualPayoffTimeRemaining: formatDuration(actualPayoffMonths),
-    /** (3) Closing at your recent payment pace (average paid EMI) */
-    averageMonthlyPayment,
+    /** Your recurring EMI (recent average or current manual EMI) */
+    actualMonthlyEmi,
+    averageMonthlyEmi: actualMonthlyEmi,
+    /** Average prepayment in recent months with prepays logged */
+    averageMonthlyPrepayment,
+    /** EMI + avg prepayment — total monthly pace */
+    paceMonthlyPayment,
+    averageMonthlyPayment: paceMonthlyPayment,
     pacePayoffMonths,
     pacePayoffTimeRemaining: formatDuration(pacePayoffMonths),
     monthsSavedVsSchedule,
@@ -1089,6 +1107,27 @@ export function formatPayoffAcceleration(months) {
     sub: `Equivalent to skipping ~${n} EMI${n === 1 ? '' : 's'}`,
   };
 }
+
+/** Compact pace line for card columns: ₹50k + ₹6.4k prepay */
+export function formatPacePaymentCompact(stats) {
+  const emi = Math.round(toNum(stats?.averageMonthlyEmi ?? stats?.actualMonthlyEmi ?? stats?.monthlyPayment ?? stats?.emi));
+  const prepay = Math.round(toNum(stats?.averageMonthlyPrepayment));
+  if (prepay > 0) {
+    return `${formatIndianCurrency(emi, false)} + ${formatIndianCurrency(prepay, false)} prepay`;
+  }
+  return `${formatIndianCurrency(emi, false)} EMI`;
+}
+
+/** Human label for your-pace payment: EMI + avg prepayment */
+export function formatPacePaymentSummary(stats) {
+  const emi = Math.round(toNum(stats?.averageMonthlyEmi ?? stats?.actualMonthlyEmi ?? stats?.monthlyPayment ?? stats?.emi));
+  const prepay = Math.round(toNum(stats?.averageMonthlyPrepayment));
+  if (prepay > 0) {
+    return `EMI ${formatIndianCurrency(emi, false)} + ${formatIndianCurrency(prepay, false)} avg prepay/mo`;
+  }
+  return `EMI ${formatIndianCurrency(emi, false)}/mo only`;
+}
+
 /** @deprecated use calculateInterestSavedForDate */
 export function calculateInterestSaved(prepaymentAmount, annualRate, remainingMonths) {
   const p = toNum(prepaymentAmount);
